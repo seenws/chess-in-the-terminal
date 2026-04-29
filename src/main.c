@@ -107,16 +107,22 @@ board_print(uint8_t board[128])
         {' ', 'P', 'B', 'N', 'R', 'Q', 'K'}  // black (uppercase)
     };
 
+    uint8_t sq;
+    char sym;
+
     for (int rank = 7; rank >= 0; --rank) {
         printf("%d  ", rank + 1);
+
         for (int file = 0; file < 8; ++file) {
-            uint8_t sq = board[(rank << 4) | file];
-            char sym = is_empty(sq) ? '.' : symbols[piece_color(sq)][piece_type(sq)];
+            sq = board[(rank << 4) | file];
+            sym = is_empty(sq) ? '.' : symbols[piece_color(sq)][piece_type(sq)];
 
             printf("%c ", sym);
         }
+
         printf("\n");
     }
+
     printf("\n   a b c d e f g h\n");
 }
 
