@@ -105,5 +105,5 @@ board_print(uint8_t board[128])
         printf("\n");
     }
 
-    printf("\n   a b c d e f g h\n");
+    printf("\n   a b c d e f g h\n\n");
 }

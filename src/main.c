@@ -1,17 +1,30 @@
+#include <stdio.h>
+#include <string.h>
+
 #include "../headers/board.h"
+#include "../headers/parser.h"
 
 int
 main(void)
 {
-    // The board is encoded as a one-dimensional array of size 16x8 = 128, functioning as two adjacent
-    // 8x8 boards where the board on the left represents the game state and the board on the right containing
-    // illegal moves.
-    //
-    // https://en.wikipedia.org/wiki/0x88
     uint8_t board[128] = {0};
+    
+    char buf[32];
+    size_t nread;
 
     board_init(board);
     board_print(board);
+
+    // TODO: move into a game_step function later in game.c
+    for (;;) {
+        memset(buf, 0, sizeof(buf));
+
+        nread = get_line(buf, 32);
+        if (strcmp("quit", buf) == 0)
+            break;
+
+        printf("'%.*s', %lu\n", (int)nread, buf, nread);
+    }
 
 	return 0;
 }

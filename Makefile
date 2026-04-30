@@ -1,7 +1,7 @@
 CC     = gcc
-CFLAGS = -Wall -Wextra -std=c11 -Iheaders
+CFLAGS = -Wall -Wextra -std=c99 -Iheaders
 
-SRC = src/main.c src/board.c
+SRC = src/main.c src/board.c src/parser.c
 OBJ = $(SRC:.c=.o)
 
 TARGET = citt
