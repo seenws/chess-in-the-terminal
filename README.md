@@ -1,16 +1,12 @@
 # chess-in-the-terminal
 
-A chess engine and terminal client written in C, built from scratch with an emphasis on doing things properly — compact board representation, clean move encoding, and eventually a full legal move generator and algebraic notation parser.
-
-This isn't a wrapper around someone else's engine. The board, the piece encoding, the move representation — all of it is hand-rolled.
+A chess engine and terminal client written in C, built from scratch with an emphasis on doing things properly.
 
 ---
 
 ## How it works
 
-The board is represented using [0x88 encoding](https://en.wikipedia.org/wiki/0x88) — a 128-byte array that functions as two adjacent 8x8 boards. The left half holds the game state, the right half makes off-board detection branchless: if a square index has bit 3 of the upper nibble set (`sq & 0x88`), it's off the board.
-
-Pieces are packed into a single byte — 1 bit for color, 3 bits for type — leaving room to extend later without changing the board representation.
+The board is represented using [0x88 encoding](https://en.wikipedia.org/wiki/0x88), a 128-byte array that functions as two adjacent 8x8 boards. The left half holds the game state, the right half makes off-board detection branchless: if a square index has bit 3 of the upper nibble set (`sq & 0x88`), it's off the board.
 
 ```
 bit: 7 6 5 4 3 2 1 0
