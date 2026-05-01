@@ -19,7 +19,7 @@ main(void)
     for (;;) {
         memset(buf, 0, sizeof(buf));
 
-        nread = get_line(buf, 32);
+        nread = get_line(buf, 32, stdin);
         if (strcmp("quit", buf) == 0)
             break;
 

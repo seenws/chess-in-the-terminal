@@ -4,26 +4,28 @@
 
 // Takes a single line of input from stdin and writes it to a buffer.
 size_t
-get_line(char *buffer, size_t bufsz)
+get_line(char *buffer, size_t bufsz, FILE *file)
 {
-    if (bufsz == 0)
-        return 0;
-
-    char ch;
+    char ch = 0;
+    size_t nread;
     size_t buflen = 0;
 
-    while (buflen + 1 < bufsz) {
-        if (fread(&ch, 1, 1, stdin) == 0 || ch == '\n')
+    if (file == NULL || feof(file))
+        return 0;
+
+    if (ferror(file))
+        return 0;
+
+    while (buflen < bufsz) {
+        if ((nread = fread(&ch, sizeof ch, 1, file)) == 0 || ch == '\n')
             break;
+
         buffer[buflen++] = ch;
     }
 
-    buffer[buflen] = '\0';
-
-    if (ch != '\n' && buflen + 1 == bufsz) {
-        while (fread(&ch, 1, 1, stdin) == 1 && ch != '\n')
+    if (buflen >= bufsz)
+        while ((nread = fread(&ch, sizeof ch, 1, file)) > 0 && ch != '\n')
             ;
-    }
 
     return buflen;
 }
