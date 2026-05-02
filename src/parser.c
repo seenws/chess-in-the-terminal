@@ -3,6 +3,7 @@
 #include <string.h>
 
 // Takes a single line of input from stdin and writes it to a buffer.
+// Discards trailing characters outside the buffer.
 size_t
 get_line(char *buffer, size_t bufsz, FILE *file)
 {

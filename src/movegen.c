@@ -1,4 +1,7 @@
+#include <stddef.h>
+
 #include "../headers/board.h"
+#include "../headers/movegen.h"
 
 // Leaping pieces
 static const int8_t knight_offsets[8] = { -33, -31, -18, -14, 14, 18, 31, 33 };

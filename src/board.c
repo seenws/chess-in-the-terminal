@@ -29,8 +29,8 @@ void
 board_print(uint8_t board[128])
 {
     static const char symbols[2][7] = {
-        {' ', 'p', 'b', 'n', 'r', 'q', 'k'}, // white (lowercase)
-        {' ', 'P', 'B', 'N', 'R', 'Q', 'K'}  // black (uppercase)
+        {' ', 'P', 'B', 'N', 'R', 'Q', 'K'},  // White pieces
+        {' ', 'p', 'b', 'n', 'r', 'q', 'k'}   // Black pieces
     };
 
     uint8_t sq;
@@ -41,7 +41,7 @@ board_print(uint8_t board[128])
 
         for (int file = 0; file < 8; ++file) {
             sq = board[(rank << 4) | file];
-            sym = is_empty(sq) ? '.' : symbols[piece_color(sq)][piece_type(sq)];
+            sym = is_empty(sq) ? '.': symbols[piece_color(sq)][piece_type(sq)];
 
             printf("%c ", sym);
         }

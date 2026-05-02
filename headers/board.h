@@ -20,11 +20,6 @@ enum type {
     king
 };
 
-struct piece {
-    enum color color;
-    enum type type;
-};
-
 static inline int
 on_board(int sq)
 {
