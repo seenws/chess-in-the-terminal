@@ -9,7 +9,7 @@ void
 game_init(struct game *g)
 {
     board_init(g->board);
-    g->turn      = white;
+    g->turn      = COLOR_WHITE;
     g->castling  = CASTLE_ALL;
     g->ep_target = EP_NONE;
     g->halfmove  = 0;
@@ -23,7 +23,7 @@ game_step(struct game *g)
     size_t nread;
 
     board_print(g->board);
-    printf("%s to move > ", g->turn == white ? "white" : "black");
+    printf("%s to move > ", g->turn == COLOR_WHITE ? "white" : "black");
     fflush(stdout);
 
     memset(buf, 0, sizeof(buf));
@@ -38,8 +38,8 @@ game_step(struct game *g)
     // TODO: parse SAN, validate against legal moves, apply via make_move.
     printf("'%.*s' (%zu chars)\n", (int)nread, buf, nread);
 
-    g->turn = (g->turn == white) ? black : white;
-    if (g->turn == white)
+    g->turn = (g->turn == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
+    if (g->turn == COLOR_WHITE)
         g->fullmove++;
 
     return 1;

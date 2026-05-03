@@ -2,6 +2,7 @@
 #define CITT_HEADERS_MOVEGEN_H_
 
 #include <stddef.h>
+#include <assert.h>
 
 #include "board.h"
 
@@ -20,12 +21,33 @@ struct move {
     uint8_t from;
     uint8_t to;
     enum move_flag flags;
-    enum type promo;
+    enum piece_type promo;
 };
 
 struct move_list {
     struct move moves[MAX_MOVES];
     size_t count;
 };
+
+static inline void
+move_list_push(struct move_list *list,
+               const uint8_t from,
+               const uint8_t to,
+               const enum move_flag flags,
+               const enum piece_type promo)
+{
+    assert(list != NULL);
+    assert(list->count < MAX_MOVES);
+
+    list->moves[list->count++] = (struct move) {
+        .from = from,
+        .to = to,
+        .flags = flags,
+        .promo = promo
+    };
+}
+
+struct game;
+void append_pseudolegal_moves(const struct game *g, struct move_list *list);
 
 #endif

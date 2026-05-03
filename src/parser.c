@@ -2,6 +2,8 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "parser.h"
+
 // Takes a single line of input from stdin and writes it to a buffer.
 // Discards trailing characters outside the buffer.
 size_t
