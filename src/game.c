@@ -22,23 +22,34 @@ game_step(struct game *g)
     char buf[32];
     size_t nread;
 
-    board_print(g->board);
-    printf("%s to move > ", g->turn == COLOR_WHITE ? "white" : "black");
-    fflush(stdout);
+    for (;;) {
+        board_print(g->board);
+        printf("%s to move > ", g->turn == COLOR_WHITE ? "white" : "black");
+        fflush(stdout);
 
-    memset(buf, 0, sizeof(buf));
-    nread = get_line(buf, sizeof(buf), stdin);
+        memset(buf, 0, sizeof(buf));
 
-    if (nread == 0 && feof(stdin))
-        return 0;
+        // taking 31 to leave a space for NUL
+        nread = get_line(buf, 31, stdin);
 
-    if (strcmp("quit", buf) == 0)
-        return 0;
+        if (nread == 0 && feof(stdin))
+            return 0;
 
-    // TODO: parse SAN, validate against legal moves, apply via make_move.
-    printf("'%.*s' (%zu chars)\n", (int)nread, buf, nread);
+        if (nread == 0) {
+            puts("Please enter a move.");
+            continue;
+        }
+
+        if (!parse_san(buf, nread)) {
+            printf("'%s' - invalid SAN syntax\n", buf);
+            continue;
+        }
+
+        break;
+    }
 
     g->turn = (g->turn == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
+
     if (g->turn == COLOR_WHITE)
         g->fullmove++;
 

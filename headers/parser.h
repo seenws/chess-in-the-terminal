@@ -5,5 +5,7 @@
 #include <stdio.h>
 
 size_t get_line(char *buffer, size_t bufsz, FILE *file);
+int parse_san(char const *buffer, size_t bufsz);
+
 
 #endif
