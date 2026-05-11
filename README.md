@@ -1,6 +1,6 @@
 # chess-in-the-terminal
 
-A chess engine and terminal client written in C, built from scratch with an emphasis on doing things properly.
+CITT (**Chess In The Terminal**) is a lightweight chess game written in C99, built from scratch with an emphasis on doing things properly. It runs in any terminal: pieces are entered in standard algebraic notation, the board is rendered as ASCII after every move.
 
 ---
 
@@ -16,7 +16,7 @@ e.g. black rook  = 0b00001011
      white queen = 0b00000101
 ```
 
-Moves are represented as a struct encoding origin, destination, and a bitmask of flags for captures, castling, en passant, and promotion.
+Moves are represented as a struct encoding origin, destination, and a bitmask of flags for captures, castling, en passant, and promotion. Each turn the engine generates the side-to-move's pseudolegal moves, parses the user's SAN input, matches it against that list, and applies the matching move.
 
 ---
 
@@ -26,10 +26,19 @@ Moves are represented as a struct encoding origin, destination, and a bitmask of
 - [x] Piece encoding/decoding
 - [x] Board initialisation
 - [x] Terminal board rendering
-- [ ] Game state (turn, castling rights, en passant)
-- [ ] Move generation
-- [ ] Algebraic notation parser
-- [ ] Game loop
+- [x] Game state (turn, en passant target, fullmove counter)
+- [x] Pseudolegal move generation (pawns, knights, bishops, rooks, queens, kings)
+- [x] Algebraic notation parser
+- [x] Game loop with SAN input and move application
+
+---
+
+## Known issues
+
+- **No legality filtering.** Only *pseudolegal* moves are generated, so moves that leave the side-to-move's king in check are not rejected, and there is no check/checkmate/stalemate detection.
+- **No castling.** The move-apply code handles a castling move correctly, but the move generator does not yet emit `O-O` / `O-O-O`, so castling input is rejected as illegal.
+- **Castling rights and halfmove clock are not maintained** across moves. The fields exist on the game struct but are not updated by `make_move`.
+- **Promotion defaults to queen** when the user omits `=X` from a promoting pawn move.
 
 ---
 
@@ -41,8 +50,47 @@ Requires GCC and Make.
 git clone https://github.com/seenws/chess-in-the-terminal
 cd chess-in-the-terminal
 make
+```
+
+This produces a `citt` binary in the project root.
+
+---
+
+## Playing
+
+Run the binary:
+
+```bash
 ./citt
 ```
+
+The board is printed after every move and you are prompted for input as the side to move. Enter moves in standard algebraic notation; the parser accepts:
+
+| Form     | Meaning                                  |
+| -------- | ---------------------------------------- |
+| `e4`     | pawn push                                |
+| `Nf3`    | piece move (`N`, `B`, `R`, `Q`, `K`)     |
+| `Rce8`   | file disambiguation                      |
+| `R1e2`   | rank disambiguation                      |
+| `Qh3f1`  | full origin square disambiguation        |
+| `exd5`   | capture (the `x` is optional)            |
+| `e8=Q`   | promotion (`Q`, `R`, `B`, `N`)           |
+| `O-O`    | kingside castle *(parsed; not generated)* |
+| `O-O-O`  | queenside castle *(parsed; not generated)* |
+
+Trailing `+`, `#`, `!`, `?` annotations are accepted and ignored. Invalid notation prints `Invalid notation.`; a move that doesn't match any pseudolegal move prints `Illegal move.` and re-prompts. Send EOF (`Ctrl-D`) to exit.
+
+---
+
+## Tests
+
+The move generator has a small assertion-based test suite in `tests/tmovegen.c`. Run it with:
+
+```bash
+make test
+```
+
+This builds a separate `tmovegen` binary (with `-g -O0` for debugging) and executes it. On success the suite prints each test's move list and finishes with `OK`; any failure aborts via `assert`.
 
 ---
 
@@ -51,14 +99,18 @@ make
 ```
 chess-in-the-terminal/
 ├── src/
-│   ├── main.c       # Entry point and game loop
-│   ├── board.c      # Board init, rendering, piece encoding
-│   ├── movegen.c    # Move representation and generation
-│   └── parser.c     # Input handling and notation parsing
+│   ├── main.c       # Entry point
+│   ├── board.c      # Board init and rendering
+│   ├── movegen.c    # Pseudolegal move generation
+│   ├── parser.c     # get_line, SAN parser, move matcher
+│   └── game.c       # Game state, game loop, make_move
 ├── headers/
 │   ├── board.h
+│   ├── game.h
 │   ├── movegen.h
 │   └── parser.h
+├── tests/
+│   └── tmovegen.c   # Move generation tests
 └── Makefile
 ```
 

@@ -6,8 +6,6 @@ OBJ = $(SRC:.c=.o)
 
 TARGET = citt
 
-TEST_SRC = tests/tmovegen.c
-TEST_OBJ = $(TEST_SRC:.c=.o)
 TEST_BIN = tmovegen
 
 $(TARGET): $(OBJ)
@@ -16,13 +14,16 @@ $(TARGET): $(OBJ)
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(TEST_BIN): $(TEST_OBJ)
-	$(CC) $(CFLAGS) -o $@ $^
+# Tests are built straight from source with -g -O0 for gdb. board.c is linked
+# for board_init/board_print; movegen.c is #included by the test file, so we
+# must NOT also link src/movegen.o (would duplicate append_pseudolegal_moves).
+$(TEST_BIN): tests/tmovegen.c src/board.c headers/board.h headers/game.h headers/movegen.h
+	$(CC) $(CFLAGS) -g -O0 -o $@ tests/tmovegen.c src/board.c
 
 test: $(TEST_BIN)
 	./$(TEST_BIN)
 
 clean:
-	rm -f $(OBJ) $(TEST_OBJ) $(TARGET) $(TEST_BIN)
+	rm -f $(OBJ) $(TARGET) $(TEST_BIN)
 
 .PHONY: clean test
