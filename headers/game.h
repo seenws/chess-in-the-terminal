@@ -5,6 +5,8 @@
 
 #include "board.h"
 
+struct move;
+
 // Sentinel for ep_target meaning "no en passant capture available."
 // 0xFF fails on_board(), so attack/move generation needs no special-case branch.
 #define EP_NONE 0xFF
@@ -28,5 +30,6 @@ struct game {
 
 void game_init(struct game *g);
 int  game_step(struct game *g);  // returns 0 to stop the game loop, nonzero to continue
+void make_move(struct game *g, const struct move *m);
 
 #endif

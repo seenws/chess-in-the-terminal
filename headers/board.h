@@ -89,9 +89,9 @@ square_file(int sq)
 }
 
 static inline int
-is_empty(uint8_t p)
+is_empty(uint8_t sq)
 {
-    return p == EMPTY;
+    return sq == EMPTY;
 }
 
 void board_init  (uint8_t board[128]);
