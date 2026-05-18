@@ -18,28 +18,7 @@ e.g. black rook  = 0b00001011
 
 Moves are represented as a struct encoding origin, destination, and a bitmask of flags for captures, castling, en passant, and promotion. Each turn the engine generates the side-to-move's pseudolegal moves, parses the user's SAN input, matches it against that list, and applies the matching move.
 
----
-
-## Current state
-
-- [x] 0x88 board representation
-- [x] Piece encoding/decoding
-- [x] Board initialisation
-- [x] Terminal board rendering
-- [x] Game state (turn, en passant target, fullmove counter)
-- [x] Pseudolegal move generation (pawns, knights, bishops, rooks, queens, kings)
-- [x] Algebraic notation parser
-- [x] Game loop with SAN input and move application
-
----
-
-## Known issues
-
-- **No legality filtering.** Only *pseudolegal* moves are generated, so moves that leave the side-to-move's king in check are not rejected, and there is no check/checkmate/stalemate detection.
-- **No castling.** The move-apply code handles a castling move correctly, but the move generator does not yet emit `O-O` / `O-O-O`, so castling input is rejected as illegal.
-- **Castling rights and halfmove clock are not maintained** across moves. The fields exist on the game struct but are not updated by `make_move`.
-- **Promotion defaults to queen** when the user omits `=X` from a promoting pawn move.
-
+Searching is done via a [Negamax](https://en.wikipedia.org/wiki/Negamax) algorithm with alpha-beta pruning and a transposition table.
 ---
 
 ## Building
@@ -57,11 +36,11 @@ This produces a `citt` binary in the project root.
 ---
 
 ## Playing
-
-Run the binary:
-
 ```bash
-./citt
+usage: ./citt [-w] [-b]
+  -w, --ai-white    engine plays white
+  -b, --ai-black    engine plays black
+default: human vs human
 ```
 
 The board is printed after every move and you are prompted for input as the side to move. Enter moves in standard algebraic notation; the parser accepts:
@@ -92,27 +71,12 @@ make test
 
 This builds a separate `tmovegen` binary (with `-g -O0` for debugging) and executes it. On success the suite prints each test's move list and finishes with `OK`; any failure aborts via `assert`.
 
----
-
-## Project structure
-
+The move generator also has a debug mode including further information about movemaking.
+```bash
+make debug
 ```
-chess-in-the-terminal/
-├── src/
-│   ├── main.c       # Entry point
-│   ├── board.c      # Board init and rendering
-│   ├── movegen.c    # Pseudolegal move generation
-│   ├── parser.c     # get_line, SAN parser, move matcher
-│   └── game.c       # Game state, game loop, make_move
-├── headers/
-│   ├── board.h
-│   ├── game.h
-│   ├── movegen.h
-│   └── parser.h
-├── tests/
-│   └── tmovegen.c   # Move generation tests
-└── Makefile
-```
+
+This builds the citt binary with debug mode enabled, play it as you would normally with ``./citt [-w] [-b]``.
 
 ---
 

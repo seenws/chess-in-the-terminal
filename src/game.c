@@ -90,7 +90,7 @@ game_step(struct game *g)
         int score = search_root(g, AI_DEFAULT_DEPTH, &m);
         char uci[6];
         move_to_uci(&m, uci);
-        printf("%s (engine) plays %s  [score=%d]\n",
+        printf("%s (engine) plays %s  [score = %d]\n",
                g->turn == COLOR_WHITE ? "white" : "black", uci, score);
         make_move(g, &m);
         return 1;

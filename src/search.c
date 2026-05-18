@@ -490,7 +490,7 @@ search_root(struct game *g, int max_depth, struct move *best_out)
             double             dt          = now_seconds() - iter_t_before;
             unsigned long long iter_nodes  = s_nodes - iter_nodes_before;
             double             knps        = dt > 0 ? (iter_nodes / 1000.0) / dt : 0.0;
-            DBG_PRINTF("[search] d=%2d score=%6d best=%s nodes=%llu (%.1f kn/s) tt_hits=%llu cutoffs=%llu\n",
+            DBG_PRINTF("[search] d =%2d score = %6d best = %s nodes = %llu (%.1f kn/s) tt_hits=%llu cutoffs=%llu\n",
                        d, score, uci, iter_nodes, knps, s_tt_hits, s_cutoffs);
         }
 #endif
