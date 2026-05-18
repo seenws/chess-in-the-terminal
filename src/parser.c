@@ -12,6 +12,7 @@
 // The return value will never exceed the buffer size.
 //
 // There is no distinction made between 0 bytes read and EOF. To check for EOF, use feof(file).
+// Taken from https://gitlab.com/bradenbest/bradenlib/-/blob/master/headers/get_line.h
 size_t
 get_line(char *buffer, size_t bufsz, FILE *file)
 {

@@ -11,6 +11,7 @@ uint64_t z_side;
 
 static int zobrist_initialized = 0;
 
+// https://rosettacode.org/wiki/Pseudo-random_numbers/Splitmix64
 static uint64_t
 splitmix64(uint64_t *s)
 {

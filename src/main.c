@@ -22,16 +22,22 @@ main(int argc, char **argv)
     game_init(&g);
 
     for (int i = 1; i < argc; ++i) {
-        if (strcmp(argv[i], "-w") == 0 || strcmp(argv[i], "--ai-white") == 0)
+        if (strcmp(argv[i], "-w") == 0)
             g.ai_white = 1;
-        else if (strcmp(argv[i], "-b") == 0 || strcmp(argv[i], "--ai-black") == 0)
+        
+        else if (strcmp(argv[i], "-b") == 0)
             g.ai_black = 1;
+        
         else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
+            
             return 0;
-        } else {
+        }
+        
+        else {
             fprintf(stderr, "unknown option: %s\n", argv[i]);
             print_usage(argv[0]);
+            
             return 1;
         }
     }

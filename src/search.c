@@ -29,11 +29,10 @@ now_seconds(void)
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
+    
     return (double)ts.tv_sec + (double)ts.tv_nsec * 1e-9;
 }
 #endif
-
-// ----- Transposition table ----------------------------------------------------
 
 static struct tt_entry *tt       = NULL;
 static size_t           tt_count = 0;   // always a power of two
@@ -199,7 +198,7 @@ move_unpack(uint16_t v)
     m.from  = (uint8_t)(v & 0x7F);
     m.to    = (uint8_t)((v >> 7)  & 0x7F);
     m.promo = unpack_promo((v >> 14) & 0x3);
-    m.flags = MOVE_QUIET;   // re-derived from board state at use site
+    m.flags = MOVE_QUIET;
     
     return m;
 }
@@ -252,36 +251,15 @@ evaluate(const struct game *g)
 }
 
 static int
-find_king(const uint8_t board[128], enum color c)
+mover_in_check(const struct game *g)
 {
-    uint8_t target = encode_piece(c, PIECE_KING);
-
-    for (int sq = 0; sq < 128; ++sq)
-        if (on_board(sq) && board[sq] == target)
-            return sq;
-
-    return -1;
-}
-
-static int
-in_check_after_move(const struct game *g)
-{
-    enum color just_moved = (g->turn == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
-    int king_sq = find_king(g->board, just_moved);
-    if (king_sq < 0) return 1;
-
-    struct move_list ml; ml.count = 0;
-    append_pseudolegal_moves(g, &ml);
-
-    for (size_t i = 0; i < ml.count; ++i)
-        if (ml.moves[i].to == (uint8_t)king_sq)
-            return 1;
-
-    return 0;
+    enum color moved = (g->turn == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
+    
+    return king_in_check(g, moved);
 }
 
 // TT move first, then MVV-LVA on captures, then quiet. Selection sort over
-// the move list — small N, simple, fine until we profile.
+// the move list — small N, simple, needs further profiling.
 static int
 score_move(const struct move *m, const uint8_t board[128], uint16_t tt_move)
 {
@@ -369,7 +347,7 @@ negamax(struct game *g, int depth, int ply, int alpha, int beta)
         struct game child = *g;
         make_move(&child, &ml.moves[i]);
 
-        if (in_check_after_move(&child))
+        if (mover_in_check(&child))
             continue;
 
         legal++;
@@ -380,27 +358,21 @@ negamax(struct game *g, int depth, int ply, int alpha, int beta)
             best      = score;
             best_move = move_pack(&ml.moves[i]);
         }
-        if (best > alpha) alpha = best;
-        if (alpha >= beta) { INC(s_cutoffs); break; }
+
+        if (best > alpha) {   
+            alpha = best;
+        
+            if (alpha >= beta) {
+                INC(s_cutoffs);
+                break;
+            }
+        }
     }
 
     if (legal == 0) {
-        // Distinguish mate from stalemate by checking whether the side
-        // to move is in check right now.
-        enum color me      = g->turn;
-        int        king_sq = find_king(g->board, me);
-
-        struct game flipped = *g;
-        flipped.turn = (me == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
-
-        struct move_list opp; opp.count = 0;
-        append_pseudolegal_moves(&flipped, &opp);
-
-        int checked = 0;
-        for (size_t i = 0; i < opp.count; ++i)
-            if (opp.moves[i].to == (uint8_t)king_sq) { checked = 1; break; }
-
-        return checked ? -SEARCH_MATE + ply : 0;
+        // No legal reply: mate if currently in check, stalemate otherwise.
+        // Ply-adjusted so shallower mates score higher than deeper ones.
+        return king_in_check(g, g->turn) ? -SEARCH_MATE + ply : 0;
     }
 
     enum tt_bound bound = (best <= alpha_orig) ? TT_BOUND_UPPER
@@ -460,7 +432,7 @@ search_root(struct game *g, int max_depth, struct move *best_out)
             struct game child = *g;
             make_move(&child, &ml.moves[i]);
 
-            if (in_check_after_move(&child))
+            if (mover_in_check(&child))
                 continue;
 
             legal++;
@@ -471,6 +443,7 @@ search_root(struct game *g, int max_depth, struct move *best_out)
                 best       = s;
                 local_best = ml.moves[i];
             }
+            
             if (best > alpha) alpha = best;
         }
 
@@ -486,10 +459,13 @@ search_root(struct game *g, int max_depth, struct move *best_out)
 #ifdef DEBUG
         {
             char uci[6];
+            
             move_to_uci(&local_best, uci);
+            
             double             dt          = now_seconds() - iter_t_before;
             unsigned long long iter_nodes  = s_nodes - iter_nodes_before;
             double             knps        = dt > 0 ? (iter_nodes / 1000.0) / dt : 0.0;
+            
             DBG_PRINTF("[search] d =%2d score = %6d best = %s nodes = %llu (%.1f kn/s) tt_hits=%llu cutoffs=%llu\n",
                        d, score, uci, iter_nodes, knps, s_tt_hits, s_cutoffs);
         }

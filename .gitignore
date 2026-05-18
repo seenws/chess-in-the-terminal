@@ -56,4 +56,7 @@ dkms.conf
 
 # Project binaries
 /citt
+/citt-debug
+/citt-perft
 /tmovegen
+/build/

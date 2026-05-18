@@ -32,7 +32,7 @@ struct game {
 };
 
 void game_init(struct game *g);
-int  game_step(struct game *g);  // returns 0 to stop the game loop, nonzero to continue
+int  game_step(struct game *g);
 void make_move(struct game *g, const struct move *m);
 
 #endif
