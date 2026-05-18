@@ -19,6 +19,7 @@ e.g. black rook  = 0b00001011
 Moves are represented as a struct encoding origin, destination, and a bitmask of flags for captures, castling, en passant, and promotion. Each turn the engine generates the side-to-move's pseudolegal moves, parses the user's SAN input, matches it against that list, and applies the matching move.
 
 Searching is done via a [Negamax](https://en.wikipedia.org/wiki/Negamax) algorithm with alpha-beta pruning and a transposition table.
+
 ---
 
 ## Building
