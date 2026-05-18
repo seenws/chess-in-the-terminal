@@ -26,6 +26,9 @@ struct game {
     uint8_t    ep_target;  // 0x88 square, or EP_NONE
     uint8_t    halfmove;   // plies since last pawn move or capture (50-move rule)
     uint16_t   fullmove;   // increments after each black move, starts at 1
+    uint64_t   hash;       // Zobrist hash, kept in sync by make_move
+    uint8_t    ai_white;   // 1 -> engine plays white in game_step
+    uint8_t    ai_black;   // 1 -> engine plays black in game_step
 };
 
 void game_init(struct game *g);

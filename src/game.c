@@ -2,9 +2,12 @@
 #include <string.h>
 
 #include "board.h"
+#include "debug.h"
 #include "game.h"
 #include "movegen.h"
 #include "parser.h"
+#include "search.h"
+#include "zobrist.h"
 
 void
 game_init(struct game *g)
@@ -15,6 +18,11 @@ game_init(struct game *g)
     g->ep_target = EP_NONE;
     g->halfmove  = 0;
     g->fullmove  = 1;
+    g->ai_white  = 0;
+    g->ai_black  = 0;
+
+    zobrist_init(0);
+    g->hash = zobrist_compute(g);
 }
 
 void
@@ -50,6 +58,16 @@ make_move(struct game *g, const struct move *m)
         if (df == 2 || df == -2)
             g->ep_target = (m->from + m->to) / 2;
     }
+
+    g->turn = (g->turn == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
+
+    if (g->turn == COLOR_WHITE)
+        g->fullmove++;
+
+    // First cut: recompute the hash from scratch. Cheap (one 0x88 walk) and
+    // bug-resistant. Replace with incremental XORs inside this function once
+    // castling-rights and halfmove updates land here too.
+    g->hash = zobrist_compute(g);
 }
 
 int
@@ -62,6 +80,22 @@ game_step(struct game *g)
     const struct move *chosen = NULL;
 
     board_print(g->board);
+
+    DBG_ASSERT(g->hash == zobrist_compute(g));
+
+    int ai_turn = (g->turn == COLOR_WHITE) ? g->ai_white : g->ai_black;
+
+    if (ai_turn) {
+        struct move m;
+        int score = search_root(g, AI_DEFAULT_DEPTH, &m);
+        char uci[6];
+        move_to_uci(&m, uci);
+        printf("%s (engine) plays %s  [score=%d]\n",
+               g->turn == COLOR_WHITE ? "white" : "black", uci, score);
+        make_move(g, &m);
+        return 1;
+    }
+
     append_pseudolegal_moves(g, &list);
 
     for (;;) {
@@ -96,11 +130,6 @@ game_step(struct game *g)
     }
 
     make_move(g, chosen);
-
-    g->turn = (g->turn == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
-
-    if (g->turn == COLOR_WHITE)
-        g->fullmove++;
 
     return 1;
 }
