@@ -181,20 +181,6 @@ A separate `citt-uci` binary speaks the [Universal Chess Interface](https://www.
 make uci
 ```
 
-Quick hand-driven sanity check:
-
-```bash
-$ printf "uci\nposition startpos\ngo depth 5\nquit\n" | ./citt-uci
-id name CITT
-id author Sinan Olsson-Pasic
-option name Hash type spin default 16 min 1 max 4096
-uciok
-info depth 1 score cp 50 nodes 40 nps 40 time 0 pv b1c3
-info depth 2 score cp 0 nodes 199 nps 199000 time 1 pv b1c3 b8c6
-...
-bestmove b1c3
-```
-
 Supported commands: `uci`, `isready`, `ucinewgame`, `position [startpos | fen ...] [moves ...]`, `go [depth | nodes | movetime | wtime/btime/winc/binc/movestogo | infinite]`, `stop`, `quit`, `setoption name Hash value N`. Mate scores are reported as `score mate N` (UCI convention); the move list per `info` line is a PV extracted from the transposition table.
 
 Single-threaded: `stop` is honored at the next abort poll inside the search (every 4096 nodes), and clock-based time controls drive search termination via an internal deadline polled the same way. The deadline formula is `our_time / moves_to_go + 0.75 * inc`, hard-capped at 25% of remaining time so the engine can't blow the clock on one move.
@@ -212,36 +198,6 @@ Calibrated against Stockfish 16 at fixed `UCI_Elo` levels, 20 games per rung at 
 | sf-1800  | 14 – 5 – 1 | 72.5% |
 | sf-2000  |  9 – 7 – 4 | 55.0% |
 | sf-2200  |  8 – 10 – 2| 45.0% |
-
-The 50% crossover sits at roughly sf-2100. Estimated strength: **~1950–2050 Elo** at fast time control. The middle three rungs imply ~1815, ~1970, ~2035; that central cluster is the most trustworthy estimate because Stockfish's `UCI_Elo` is nonlinear at the low end (it weakens by capping depth and randomising rather than by playing positionally weaker chess, so beating sf-1400 17-2 does not imply being 350 Elo above 1400).
-
-The engine never lost a game on time across the 100-game sweep; Stockfish lost two on time at the lower rungs. The time-budget formula above is conservative — there is headroom to play more aggressively without risking flags.
-
----
-
-## Testing changes
-
-Any change that claims to add Elo should be validated by [SPRT](https://en.wikipedia.org/wiki/Sequential_probability_ratio_test) against a frozen baseline binary. The repository convention is a binary named `citt-uci-baseline` sitting alongside the working `citt-uci` (gitignored).  The current baseline corresponds to the calibration result above; bump it by `cp citt-uci citt-uci-baseline` only after a feature SPRT-passes against the previous one.
-
-```bash
-~/Code/C/chess/tools/cutechess/build/cutechess-cli \
-  -engine cmd=./citt-uci          name=new \
-  -engine cmd=./citt-uci-baseline name=baseline \
-  -each proto=uci tc=5+0.05 \
-  -sprt elo0=0 elo1=10 alpha=0.05 beta=0.05 \
-  -rounds 2000 -repeat -games 2 -concurrency 2 \
-  -pgnout sprt.pgn
-```
-
-Cutechess auto-terminates the match once it has 95%-confidence evidence in either direction — usually 200–800 games. `elo1=10` is asking *"is the new version at least 10 Elo stronger?"*; `elo0=0` is the null hypothesis (no improvement). Tighten the bounds (`elo0=-5 elo1=5`) for sensitive measurements at the cost of needing more games.
-
-For calibrating absolute strength (rather than relative-to-baseline), the same harness drives matches against Stockfish at fixed `UCI_Elo`:
-
-```bash
-... -engine cmd=stockfish name=sf-2000 \
-    option.UCI_LimitStrength=true option.UCI_Elo=2000 ...
-```
-
 ---
 
 ## License
