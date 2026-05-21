@@ -67,6 +67,10 @@ dkms.conf
 # Local test harness (cutechess-cli clone)
 /tools/
 
-# Match artifacts (calibration sweeps, SPRT runs, ad-hoc PGN dumps)
+# Match artifacts (calibration sweeps, SPRT runs, ad-hoc PGN dumps).
+# Patterns cover both well-named files (calibration.pgn, sprt.log) and
+# typo'd cousins (`-pgnout citt-vs-sf-pgn` missing the dot).
 /*.pgn
 /*.log
+/*-pgn
+/*-log
