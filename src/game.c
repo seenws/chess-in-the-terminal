@@ -1,3 +1,5 @@
+/* game.c -- game state, make/unmake, legal-move filter, interactive step.  */
+
 #include <stdio.h>
 #include <string.h>
 
@@ -9,39 +11,71 @@
 #include "search.h"
 #include "zobrist.h"
 
+/* Walks the board to (re)build every incremental field on `g`. Called from
+   game_init and parse_fen; any caller mutating board[] directly must call
+   this before searching or evaluating.  */
+void
+compute_eval_state(struct game *g)
+{
+    memset(g->material, 0, sizeof(g->material));
+    memset(g->psqt_mg,  0, sizeof(g->psqt_mg));
+    memset(g->psqt_eg,  0, sizeof(g->psqt_eg));
+    memset(g->bishops,  0, sizeof(g->bishops));
+    memset(g->king_sq,  0, sizeof(g->king_sq));
+    g->phase     = 0;
+    g->pawn_hash = 0;
+
+    for (int sq = 0; sq < 128; ++sq) {
+        if (!on_board(sq))
+            continue;
+
+        uint8_t p = g->board[sq];
+        if (is_empty(p))
+            continue;
+
+        enum color      c = piece_color(p);
+        enum piece_type t = piece_type(p);
+
+        if (t != PIECE_KING)
+            g->material[c] += (int16_t)piece_value[t];
+
+        struct pst_pair pp = pst_lookup(c, t, sq);
+        g->psqt_mg[c] += pp.mg;
+        g->psqt_eg[c] += pp.eg;
+
+        g->phase += (int16_t)phase_weight[t];
+
+        if (t == PIECE_BISHOP) g->bishops[c]++;
+        if (t == PIECE_KING)   g->king_sq[c] = (uint8_t)sq;
+        if (t == PIECE_PAWN)   g->pawn_hash ^= z_piece[p][sq];
+    }
+}
+
 void
 game_init(struct game *g)
 {
     board_init(g->board);
+
     g->turn      = COLOR_WHITE;
     g->castling  = CASTLE_ALL;
     g->ep_target = EP_NONE;
     g->halfmove  = 0;
     g->fullmove  = 1;
-    g->ai_white  = 0;
-    g->ai_black  = 0;
 
     zobrist_init(0);
     g->hash = zobrist_compute(g);
+    compute_eval_state(g);
 }
 
-// A king or rook moving from its starting square,  or any piece moving onto
-// a rook's starting square (which can only happen when the rook is captured
-// in place) invalidates the matching castling rights.
-//
-// Indexing by square keeps the logic branchless beyond the loop.
-struct castle_rights_clear {
-    uint8_t sq;
-    uint8_t mask;
-};
-
+/* Castling-rights invalidation: a king/rook leaving its starting square or
+   a capture onto a rook-starting square clears the relevant rights.  */
 static const struct castle_rights_clear castle_rights_clears[6] = {
-    { 0x04, CASTLE_WK | CASTLE_WQ },  // e1: white king
-    { 0x00, CASTLE_WQ              }, // a1: white queenside rook
-    { 0x07, CASTLE_WK              }, // h1: white kingside rook
-    { 0x74, CASTLE_BK | CASTLE_BQ },  // e8: black king
-    { 0x70, CASTLE_BQ              }, // a8: black queenside rook
-    { 0x77, CASTLE_BK              }, // h8: black kingside rook
+    { 0x04, CASTLE_WK | CASTLE_WQ },
+    { 0x00, CASTLE_WQ              },
+    { 0x07, CASTLE_WK              },
+    { 0x74, CASTLE_BK | CASTLE_BQ },
+    { 0x70, CASTLE_BQ              },
+    { 0x77, CASTLE_BK              },
 };
 
 static void
@@ -55,40 +89,135 @@ update_castling_rights(struct game *g, const struct move *m)
     }
 }
 
+/* Every board mutation has paired Zobrist, material, PSQT, phase, bishop,
+   king-square, and pawn-hash updates so the incremental state never drifts
+   from a from-scratch recompute. The capture branch must read `victim`
+   before the destination square is overwritten.  */
 void
-make_move(struct game *g, const struct move *m)
+make_move(struct game *g, const struct move *m, struct undo_state *undo)
 {
+    undo->hash      = g->hash;
+    undo->phase     = g->phase;
+    undo->pawn_hash = g->pawn_hash;
+    undo->captured  = g->board[m->to];
+    undo->ep_target = g->ep_target;
+    undo->castling  = g->castling;
+    undo->halfmove  = g->halfmove;
+    memcpy(undo->material, g->material, sizeof(g->material));
+    memcpy(undo->psqt_mg,  g->psqt_mg,  sizeof(g->psqt_mg));
+    memcpy(undo->psqt_eg,  g->psqt_eg,  sizeof(g->psqt_eg));
+    memcpy(undo->bishops,  g->bishops,  sizeof(g->bishops));
+    memcpy(undo->king_sq,  g->king_sq,  sizeof(g->king_sq));
+
     const uint8_t    piece   = g->board[m->from];
     const enum color color   = piece_color(piece);
+    const enum color opp     = (color == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
     const int        is_pawn = piece_type(piece) == PIECE_PAWN;
-    const int        is_capt = !is_empty(g->board[m->to]) || (m->flags & MOVE_ENP);
+    const uint8_t    victim  = g->board[m->to];
+    const int        is_capt = !is_empty(victim) || (m->flags & MOVE_ENP);
 
-    g->board[m->to]   = piece;
+    uint64_t h = g->hash;
+
+    if (!is_empty(victim)) {
+        enum piece_type vt = piece_type(victim);
+
+        h ^= z_piece[victim][m->to];
+
+        if (vt != PIECE_KING)
+            g->material[opp] -= (int16_t)piece_value[vt];
+
+        struct pst_pair pp = pst_lookup(opp, vt, m->to);
+        g->psqt_mg[opp] -= pp.mg;
+        g->psqt_eg[opp] -= pp.eg;
+
+        g->phase -= (int16_t)phase_weight[vt];
+
+        if (vt == PIECE_BISHOP)
+            g->bishops[opp]--;
+        if (vt == PIECE_PAWN)
+            g->pawn_hash ^= z_piece[victim][m->to];
+    }
+
+    const enum piece_type moved_type  = piece_type(piece);
+    const enum piece_type placed_type = (m->flags & MOVE_PROMO) ? m->promo : moved_type;
+
+    h ^= z_piece[piece][m->from];
+
     g->board[m->from] = EMPTY;
+    {
+        struct pst_pair pp = pst_lookup(color, moved_type, m->from);
+        g->psqt_mg[color] -= pp.mg;
+        g->psqt_eg[color] -= pp.eg;
+    }
 
-    if (m->flags & MOVE_PROMO)
-        g->board[m->to] = encode_piece(color, m->promo);
+    if (moved_type == PIECE_KING)
+        g->king_sq[color] = m->to;
+
+    if (is_pawn)
+        g->pawn_hash ^= z_piece[piece][m->from];
+
+    uint8_t placed = piece;
+
+    if (m->flags & MOVE_PROMO) {
+        placed = encode_piece(color, m->promo);
+
+        g->material[color] += (int16_t)(piece_value[m->promo] - piece_value[PIECE_PAWN]);
+        g->phase           += (int16_t)(phase_weight[m->promo] - phase_weight[PIECE_PAWN]);
+
+        if (m->promo == PIECE_BISHOP)
+            g->bishops[color]++;
+    }
+
+    g->board[m->to] = placed;
+    h ^= z_piece[placed][m->to];
+    if (is_pawn && !(m->flags & MOVE_PROMO))
+        g->pawn_hash ^= z_piece[placed][m->to];
+    {
+        struct pst_pair pp = pst_lookup(color, placed_type, m->to);
+        g->psqt_mg[color] += pp.mg;
+        g->psqt_eg[color] += pp.eg;
+    }
 
     if (m->flags & MOVE_ENP) {
-        // The captured pawn sits behind the destination square (one rank
-        // toward the capturing pawn's start rank).
-        int captured_sq = (color == COLOR_WHITE) ? m->to - 16 : m->to + 16;
+        int     captured_sq = (color == COLOR_WHITE) ? m->to - 16 : m->to + 16;
+        uint8_t victim_pawn = g->board[captured_sq];
+
+        h ^= z_piece[victim_pawn][captured_sq];
+        g->pawn_hash ^= z_piece[victim_pawn][captured_sq];
+
         g->board[captured_sq] = EMPTY;
+        g->material[opp] -= (int16_t)piece_value[PIECE_PAWN];
+
+        struct pst_pair pp = pst_lookup(opp, PIECE_PAWN, captured_sq);
+        g->psqt_mg[opp] -= pp.mg;
+        g->psqt_eg[opp] -= pp.eg;
     }
 
-    // Castling: the king has already moved above; reposition the rook to
-    // bracket the king on the inside square.
-    if (m->flags & MOVE_CASTLE_K) {
-        g->board[m->to - 1] = g->board[m->to + 1];
-        g->board[m->to + 1] = EMPTY;
-    }
-    if (m->flags & MOVE_CASTLE_Q) {
-        g->board[m->to + 1] = g->board[m->to - 2];
-        g->board[m->to - 2] = EMPTY;
+    if (m->flags & (MOVE_CASTLE_K | MOVE_CASTLE_Q)) {
+        const int     ks        = m->flags & MOVE_CASTLE_K;
+        const int     rook_from = ks ? m->to + 1 : m->to - 2;
+        const int     rook_to   = ks ? m->to - 1 : m->to + 1;
+        const uint8_t rook      = g->board[rook_from];
+
+        h ^= z_piece[rook][rook_from] ^ z_piece[rook][rook_to];
+
+        g->board[rook_to]   = rook;
+        g->board[rook_from] = EMPTY;
+
+        struct pst_pair pf = pst_lookup(color, PIECE_ROOK, rook_from);
+        struct pst_pair pt = pst_lookup(color, PIECE_ROOK, rook_to);
+        g->psqt_mg[color] += (int16_t)(pt.mg - pf.mg);
+        g->psqt_eg[color] += (int16_t)(pt.eg - pf.eg);
     }
 
+    const uint8_t cast_before = g->castling;
     update_castling_rights(g, m);
+    if (g->castling != cast_before) {
+        h ^= z_castle[cast_before & 0xF];
+        h ^= z_castle[g->castling  & 0xF];
+    }
 
+    const uint8_t ep_before = g->ep_target;
     g->ep_target = EP_NONE;
     if (is_pawn) {
         int rank_delta = square_rank(m->to) - square_rank(m->from);
@@ -96,68 +225,122 @@ make_move(struct game *g, const struct move *m)
             g->ep_target = (m->from + m->to) / 2;
     }
 
+    if (ep_before    != EP_NONE) h ^= z_ep_file[square_file(ep_before)];
+    if (g->ep_target != EP_NONE) h ^= z_ep_file[square_file(g->ep_target)];
+
     if (is_pawn || is_capt)
         g->halfmove = 0;
     else
         g->halfmove++;
 
     g->turn = (g->turn == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
+    h ^= z_side;
 
     if (g->turn == COLOR_WHITE)
         g->fullmove++;
 
-    // If after benchmarking I decide it matters I might replace this with incremental XORs.
-    g->hash = zobrist_compute(g);
+    g->hash = h;
 }
 
-// Castling moves are already legality-checked by the pseudolegal generator, but they survive the filter
-// regardless (their post-move king position is verified safe at generation).
-//
-// Defined here, in the same TU as make_move, so movegen.c stays free of any
-// dependency on the move-application machinery. The test harness compiles movegen.c standalone.
+/* Caller invariant: `m` and `undo` must be the pair handed to the most
+   recent matching make_move on `g`. Board mutations are reversed in the
+   inverse order of make_move's phases; scalar incremental state is
+   restored bitwise from undo.  */
 void
-append_legal_moves(const struct game *g, struct move_list *list)
+unmake_move(struct game *g, const struct move *m, const struct undo_state *undo)
+{
+    if (g->turn == COLOR_WHITE)
+        g->fullmove--;
+
+    g->turn = (g->turn == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
+
+    const enum color color = g->turn;
+    const enum color opp   = (color == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
+
+    g->hash      = undo->hash;
+    g->phase     = undo->phase;
+    g->pawn_hash = undo->pawn_hash;
+    g->ep_target = undo->ep_target;
+    g->castling  = undo->castling;
+    g->halfmove  = undo->halfmove;
+    memcpy(g->material, undo->material, sizeof(g->material));
+    memcpy(g->psqt_mg,  undo->psqt_mg,  sizeof(g->psqt_mg));
+    memcpy(g->psqt_eg,  undo->psqt_eg,  sizeof(g->psqt_eg));
+    memcpy(g->bishops,  undo->bishops,  sizeof(g->bishops));
+    memcpy(g->king_sq,  undo->king_sq,  sizeof(g->king_sq));
+
+    /* Un-castle the rook BEFORE we read board[m->to] for the king below.  */
+    if (m->flags & (MOVE_CASTLE_K | MOVE_CASTLE_Q)) {
+        const int ks   = m->flags & MOVE_CASTLE_K;
+        const int from = ks ? m->to + 1 : m->to - 2;
+        const int to   = ks ? m->to - 1 : m->to + 1;
+        g->board[from] = g->board[to];
+        g->board[to]   = EMPTY;
+    }
+
+    g->board[m->from] = (m->flags & MOVE_PROMO)
+        ? encode_piece(color, PIECE_PAWN)
+        : g->board[m->to];
+
+    g->board[m->to] = undo->captured;
+
+    if (m->flags & MOVE_ENP) {
+        int captured_sq = (color == COLOR_WHITE) ? m->to - 16 : m->to + 16;
+        g->board[captured_sq] = encode_piece(opp, PIECE_PAWN);
+    }
+}
+
+/* Lives here (not movegen.c) so movegen.c stays free of the
+   make/unmake dependency — the test harness compiles movegen.c
+   standalone.  */
+void
+append_legal_moves(struct game *g, struct move_list *list)
 {
     append_pseudolegal_moves(g, list);
 
     size_t kept = 0;
     for (size_t i = 0; i < list->count; ++i) {
-        struct game child = *g;
-        make_move(&child, &list->moves[i]);
+        struct undo_state undo;
+        make_move(g, &list->moves[i], &undo);
 
-        // After make_move the side-to-move has flipped; the player whose king
-        // must not be in check is the one that just moved (== g->turn).
-        if (!king_in_check(&child, g->turn))
+        enum color moved = (g->turn == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
+        if (!king_in_check(g, moved))
             list->moves[kept++] = list->moves[i];
+
+        unmake_move(g, &list->moves[i], &undo);
     }
     list->count = kept;
 }
 
-// Reports terminal positions on stdout once both sides have no legal reply.
-// Returns 1 if the game has ended (and a message was printed), 0 otherwise.
+/* Returns 1 (and prints a message) when the game has ended.  */
 static int
-report_terminal(const struct game *g)
+report_terminal(struct game *g)
 {
     struct move_list legal = { 0 };
     append_legal_moves(g, &legal);
 
-    if (legal.count > 0)
-        return 0;
-
-    if (king_in_check(g, g->turn)) {
-        const char *loser  = (g->turn == COLOR_WHITE) ? "White"  : "Black";
-        const char *winner = (g->turn == COLOR_WHITE) ? "Black"  : "White";
-        printf("Checkmate. %s wins. (%s is in check with no legal reply.)\n",
-               winner, loser);
-    } else {
-        printf("Stalemate. Draw.\n");
+    if (legal.count == 0) {
+        if (king_in_check(g, g->turn)) {
+            const char *loser  = (g->turn == COLOR_WHITE) ? "White"  : "Black";
+            const char *winner = (g->turn == COLOR_WHITE) ? "Black"  : "White";
+            printf("Checkmate. %s wins. (%s is in check with no legal reply.)\n",
+                   winner, loser);
+        } else {
+            printf("Stalemate. Draw.\n");
+        }
+        return 1;
     }
 
-    return 1;
+    if (g->halfmove >= 100) {
+        printf("Draw by 50-move rule.\n");
+        return 1;
+    }
+
+    return 0;
 }
 
 int
-game_step(struct game *g)
+game_step(struct game *g, const struct ui_config *cfg)
 {
     char buf[32];
     size_t nread;
@@ -172,7 +355,7 @@ game_step(struct game *g)
     if (report_terminal(g))
         return 0;
 
-    int ai_turn = (g->turn == COLOR_WHITE) ? g->ai_white : g->ai_black;
+    int ai_turn = (g->turn == COLOR_WHITE) ? cfg->ai_white : cfg->ai_black;
 
     if (ai_turn) {
         struct move m;
@@ -181,7 +364,8 @@ game_step(struct game *g)
         move_to_uci(&m, uci);
         printf("%s (engine) plays %s  [score = %d]\n",
                g->turn == COLOR_WHITE ? "white" : "black", uci, score);
-        make_move(g, &m);
+        struct undo_state _unused;
+        make_move(g, &m, &_unused);
         return 1;
     }
 
@@ -218,7 +402,10 @@ game_step(struct game *g)
         break;
     }
 
-    make_move(g, chosen);
+    {
+        struct undo_state _unused;
+        make_move(g, chosen, &_unused);
+    }
 
     return 1;
 }

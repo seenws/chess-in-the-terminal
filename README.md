@@ -12,13 +12,29 @@ The board is represented using [0x88 encoding](https://en.wikipedia.org/wiki/0x8
 bit: 7 6 5 4 3 2 1 0
      0 0 0 0 C T T T
 
-e.g. black rook  = 0b00001011
+e.g. black rook  = 0b00001100
      white queen = 0b00000101
 ```
 
 Moves are represented as a struct encoding origin, destination, and a bitmask of flags for captures, castling, en passant, and promotion. Each turn the engine generates the side-to-move's legal moves (pseudolegal moves filtered by a copy-make king-safety check), parses the user's SAN input, matches it against that list, and applies the matching move. Castling generation enforces all three legality conditions (not in check, no pass-through-check, no into-check) at generation time.
 
-Searching is done via a [Negamax](https://en.wikipedia.org/wiki/Negamax) algorithm with alpha-beta pruning and a transposition table.
+### Search
+
+The engine runs an iterative-deepening [Negamax](https://en.wikipedia.org/wiki/Negamax) search with alpha-beta pruning. On top of the bare alpha-beta, it adds:
+
+- **Quiescence search** with stand-pat and delta pruning, to play out forcing captures past the nominal depth and avoid horizon-effect blunders.
+- **Transposition table** (16 MB by default), Zobrist-keyed, age-aware, with depth-preferred replacement. TT entries pack the best move so it can be tried first on re-visits.
+- **Aspiration windows** at depth ≥ 5: re-search with a doubled window on fail-high or fail-low.
+- **Principal-variation search** (null-window scout on non-first moves; full re-search only when the scout suggests an improvement).
+- **Null-move pruning** (R=2) at depth ≥ 3, guarded against zugzwang by requiring non-pawn material.
+- **Late-move reductions** for non-capture, non-promotion, non-check moves after the first few tried.
+- **Move ordering**: TT move first, then MVV/LVA-scored captures, then queen/rook promotions, then killer moves (two slots per ply), then a history table indexed by (color, piece, to-square).
+
+### Evaluation
+
+A tapered evaluation interpolates middlegame and endgame piece-square tables by remaining non-pawn material (`phase`). Material, PSQT, phase, bishop counts, king squares, and a pawn-only Zobrist hash are maintained incrementally inside `make_move`/`unmake_move`, so leaf eval is O(non-incremental terms) rather than O(64).
+
+Non-incremental terms — pawn structure (doubled / isolated / passed), rook on open and semi-open files, king pawn-shield, bishop pair — are computed at the leaf and cached in a 4096-entry pawn-hash table keyed by the pawn Zobrist, so most consecutive evaluations hit the cache.
 
 ---
 
@@ -38,11 +54,15 @@ This produces a `citt` binary in the project root.
 
 ## Playing
 ```bash
-usage: ./citt [-w] [-b]
-  -w, --ai-white    engine plays white
-  -b, --ai-black    engine plays black
+usage: ./citt [-w] [-b] [-s] [-n PLIES]
+  -w, --ai-white      engine plays white
+  -b, --ai-black      engine plays black
+  -s, --selfplay      engine plays both sides (alias for -w -b)
+  -n, --max-plies N   stop after N plies (0 = unlimited; debug aid for self-play)
 default: human vs human
 ```
+
+`--selfplay` runs the engine against itself, useful for eyeballing search behavior or smoke-testing changes to evaluation or move generation. Because the engine does not (yet) enforce the 50-move or threefold-repetition draws, pair it with `-n` to bound debug runs, e.g. `./citt -s -n 80`.
 
 The board is printed after every move and you are prompted for input as the side to move. Enter moves in standard algebraic notation; the parser accepts:
 
@@ -98,42 +118,128 @@ This builds a separate `citt-perft` binary at release optimization and runs it a
 
 Perft divide is the standard tool for narrowing a perft mismatch against a reference engine: follow the line whose subtotal disagrees.
 
-Performance on author machine (i3 8350k @4.0GHz, 32gb 3200MHz DDR4):
-```bash
-perft divide: depth=5, starting position
+Performance on author machine (i3 8350k @ 4.0 GHz, 32 GB 3200 MHz DDR4):
 
-  b1a3   198572
-  b1c3   234656
-  g1f3   233491
-  g1h3   198502
-  a2a3   181046
-  a2a4   217832
-  b2b3   215255
-  b2b4   216145
-  c2c3   222861
-  c2c4   240082
-  d2d3   328511
-  d2d4   361790
-  e2e3   402988
-  e2e4   405385
-  f2f3   178889
-  f2f4   198473
-  g2g3   217210
-  g2g4   214048
-  h2h3   181044
-  h2h4   218829
-
-total: 4865609  time: 1.003s
-OK (matches reference for depth 5).
-```
 ```bash
-perft from starting position, depths 1..5
+perft from starting position, depths 1..6
 depth  nodes              time(s)    knps         status
-1      20                 0.000      2828.9       OK
-2      400                0.000      2692.2       OK
-3      8902               0.002      5180.3       OK
-4      197281             0.080      2475.6       OK
-5      4865609            1.019      4775.7       OK
+1      20                 0.000      6136.8       OK
+2      400                0.000      13862.9      OK
+3      8902               0.001      9885.4       OK
+4      197281             0.019      10328.5      OK
+5      4865609            0.463      10500.8      OK
+6      119060324          14.037     8482.2       OK
+```
+
+Movegen sustains ~8–16 Mnps depending on position density, competitive with other 0x88 mailbox engines.
+
+---
+
+## Bench
+
+A search benchmark drives iterative deepening over a fixed suite of nine FEN positions, useful for regression-checking changes to search or evaluation.
+
+```bash
+make bench
+```
+
+This builds `citt-bench` at release optimization and runs each position to depth 8 (overridable). Pass `-f "FEN"` to bench a single custom position instead of the suite.
+
+```bash
+./citt-bench 10                                 # depth 10 on the full suite
+./citt-bench -f "8/8/8/3k4/8/3K4/3P4/8 w - - 0 1" 12   # one position, depth 12
+```
+
+Each row reports node count, wall time, kn/s, the engine's chosen best move, and its score. The TT and per-search ordering tables are wiped between rows so each position is reproducible.
+
+Representative output at depth 8:
+```bash
+bench suite: 9 positions, depth 8
+position        nodes             time           knps          best       score
+startpos        nodes=    112573  time= 0.091s   1233.0 knps  best=b1c3  score=10
+kiwipete        nodes=    867758  time= 0.714s   1215.2 knps  best=d5e6  score=4
+perft3          nodes=     49204  time= 0.021s   2345.9 knps  best=b4c4  score=10
+perft4          nodes=    154063  time= 0.100s   1546.5 knps  best=g1g2  score=-743
+perft5          nodes=    268401  time= 0.117s   2291.6 knps  best=d7c8q score=539
+perft6          nodes=    641875  time= 0.465s   1381.5 knps  best=c3d5  score=34
+wac001          nodes=    210149  time= 0.081s   2581.5 knps  best=g3g6  score=28997
+sicilian        nodes=    383521  time= 0.374s   1026.5 knps  best=d7d5  score=-30
+endgame-kpk     nodes=      3688  time= 0.001s   4350.4 knps  best=d3e3  score=145
+---
+total           nodes=   2691232  time= 1.964s   1370.5 knps
+```
+
+Full search (movegen + eval + move ordering + qsearch) runs at ~1–4 Mnps depending on position. The effective branching factor settles around 2.3–2.5 as iterative deepening warms the TT and killer/history tables.
+
+---
+
+## UCI
+
+A separate `citt-uci` binary speaks the [Universal Chess Interface](https://www.shredderchess.com/chess-features/uci-universal-chess-interface.html) protocol on stdin/stdout. It exists for testing engine changes against external opponents (Stockfish, other engines) and for plugging the engine into any UCI-compatible GUI or tournament harness. The main `citt` binary keeps its SAN-driven user-vs-AI loop unchanged.
+
+```bash
+make uci
+```
+
+Quick hand-driven sanity check:
+
+```bash
+$ printf "uci\nposition startpos\ngo depth 5\nquit\n" | ./citt-uci
+id name CITT
+id author Sinan Olsson-Pasic
+option name Hash type spin default 16 min 1 max 4096
+uciok
+info depth 1 score cp 50 nodes 40 nps 40 time 0 pv b1c3
+info depth 2 score cp 0 nodes 199 nps 199000 time 1 pv b1c3 b8c6
+...
+bestmove b1c3
+```
+
+Supported commands: `uci`, `isready`, `ucinewgame`, `position [startpos | fen ...] [moves ...]`, `go [depth | nodes | movetime | wtime/btime/winc/binc/movestogo | infinite]`, `stop`, `quit`, `setoption name Hash value N`. Mate scores are reported as `score mate N` (UCI convention); the move list per `info` line is a PV extracted from the transposition table.
+
+Single-threaded: `stop` is honored at the next abort poll inside the search (every 4096 nodes), and clock-based time controls drive search termination via an internal deadline polled the same way. The deadline formula is `our_time / moves_to_go + 0.75 * inc`, hard-capped at 25% of remaining time so the engine can't blow the clock on one move.
+
+---
+
+## Strength
+
+Calibrated against Stockfish 16 at fixed `UCI_Elo` levels, 20 games per rung at 5+0.05 time control, on 2026-05-21:
+
+| Opponent | citt W–L–D | Score |
+|----------|:----------:|:-----:|
+| sf-1400  | 17 – 2 – 1 | 87.5% |
+| sf-1600  | 15 – 4 – 1 | 77.5% |
+| sf-1800  | 14 – 5 – 1 | 72.5% |
+| sf-2000  |  9 – 7 – 4 | 55.0% |
+| sf-2200  |  8 – 10 – 2| 45.0% |
+
+The 50% crossover sits at roughly sf-2100. Estimated strength: **~1950–2050 Elo** at fast time control. The middle three rungs imply ~1815, ~1970, ~2035; that central cluster is the most trustworthy estimate because Stockfish's `UCI_Elo` is nonlinear at the low end (it weakens by capping depth and randomising rather than by playing positionally weaker chess, so beating sf-1400 17-2 does not imply being 350 Elo above 1400).
+
+The engine never lost a game on time across the 100-game sweep; Stockfish lost two on time at the lower rungs. The time-budget formula above is conservative — there is headroom to play more aggressively without risking flags.
+
+---
+
+## Testing changes
+
+Any change that claims to add Elo should be validated by [SPRT](https://en.wikipedia.org/wiki/Sequential_probability_ratio_test) against a frozen baseline binary. The repository convention is a binary named `citt-uci-baseline` sitting alongside the working `citt-uci` (gitignored).  The current baseline corresponds to the calibration result above; bump it by `cp citt-uci citt-uci-baseline` only after a feature SPRT-passes against the previous one.
+
+```bash
+~/Code/C/chess/tools/cutechess/build/cutechess-cli \
+  -engine cmd=./citt-uci          name=new \
+  -engine cmd=./citt-uci-baseline name=baseline \
+  -each proto=uci tc=5+0.05 \
+  -sprt elo0=0 elo1=10 alpha=0.05 beta=0.05 \
+  -rounds 2000 -repeat -games 2 -concurrency 2 \
+  -pgnout sprt.pgn
+```
+
+Cutechess auto-terminates the match once it has 95%-confidence evidence in either direction — usually 200–800 games. `elo1=10` is asking *"is the new version at least 10 Elo stronger?"*; `elo0=0` is the null hypothesis (no improvement). Tighten the bounds (`elo0=-5 elo1=5`) for sensitive measurements at the cost of needing more games.
+
+For calibrating absolute strength (rather than relative-to-baseline), the same harness drives matches against Stockfish at fixed `UCI_Elo`:
+
+```bash
+... -engine cmd=stockfish name=sf-2000 \
+    option.UCI_LimitStrength=true option.UCI_Elo=2000 ...
 ```
 
 ---

@@ -1,18 +1,21 @@
+/* parser.c -- SAN move parser, SAN-to-move matcher, and FEN loader.  */
+
 #include <stdio.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "board.h"
+#include "game.h"
 #include "movegen.h"
 #include "parser.h"
+#include "zobrist.h"
 
-// Reads at most bufsz bytes into buffer and returns the number of characters written to the buffer, or 0.
-// The newline and discarded trailoff are not included in this count, nor NUL.
-// The return value will never exceed the buffer size.
-//
-// There is no distinction made between 0 bytes read and EOF. To check for EOF, use feof(file).
-// Taken from https://gitlab.com/bradenbest/bradenlib/-/blob/master/headers/get_line.h
+/* Reads up to bufsz bytes from `file` into `buffer`, stopping at newline or
+   EOF. Newline and any discarded overflow are not counted. Caller checks
+   feof(file) separately to distinguish end-of-stream from a blank line.
+   Adapted from https://gitlab.com/bradenbest/bradenlib.  */
 size_t
 get_line(char *buffer, size_t bufsz, FILE *file)
 {
@@ -40,30 +43,19 @@ get_line(char *buffer, size_t bufsz, FILE *file)
     return buflen;
 }
 
+/* Resolves an uppercase piece letter (NBRQK; P also when allow_pawn).
+   Returns 1 on success. King is rejected unless `allow_king`.  */
 static int
-parse_promo_piece(char c, enum piece_type *out)
-{
-    switch (c) {
-        case 'Q': *out = PIECE_QUEEN;  return 1;
-        case 'R': *out = PIECE_ROOK;   return 1;
-        case 'B': *out = PIECE_BISHOP; return 1;
-        case 'N': *out = PIECE_KNIGHT; return 1;
-        
-        default: return 0;
-    }
-}
-
-static int
-parse_piece_letter(char c, enum piece_type *out)
+piece_from_letter(char c, enum piece_type *out, int allow_king, int allow_pawn)
 {
     switch (c) {
         case 'N': *out = PIECE_KNIGHT; return 1;
         case 'B': *out = PIECE_BISHOP; return 1;
         case 'R': *out = PIECE_ROOK;   return 1;
         case 'Q': *out = PIECE_QUEEN;  return 1;
-        case 'K': *out = PIECE_KING;   return 1;
-        
-        default: return 0;
+        case 'K': if (!allow_king) return 0; *out = PIECE_KING; return 1;
+        case 'P': if (!allow_pawn) return 0; *out = PIECE_PAWN; return 1;
+        default:  return 0;
     }
 }
 
@@ -72,17 +64,15 @@ encode_square_0x88(char file_ch, char rank_ch, uint8_t *out)
 {
     if (file_ch < 'a' || file_ch > 'h' || rank_ch < '1' || rank_ch > '8')
         return 0;
-    
+
     *out = ((uint8_t)(rank_ch - '1') << 4) | (uint8_t)(file_ch - 'a');
-    
     return 1;
 }
 
-// https://en.wikipedia.org/wiki/Algebraic_notation_(chess)
-// Parses one SAN token into *out and returns 1 on success, 0 on malformed input.
-// Recognises: piece letter (NBRQK, pawn implicit), optional file/rank/both disambiguator,
-// optional 'x' capture marker, destination square, optional "=X" promotion, trailing +/#/!/?
-// annotations, and the castling tokens "O-O" / "O-O-O".
+/* Parses one SAN token. Returns 1 on success, 0 on malformed input.
+   Recognises piece letter (NBRQK; pawn implicit), optional disambiguator,
+   optional 'x', destination square, optional "=X", trailing +/#/!/?, and
+   the castling tokens "O-O" and "O-O-O".  */
 int
 parse_san(char const *buffer, size_t bufsz, struct san_move *out)
 {
@@ -105,103 +95,80 @@ parse_san(char const *buffer, size_t bufsz, struct san_move *out)
     if (len == 0)
         return 0;
 
-    // Castling tokens are matched whole; the longer one is checked first to avoid prefix conflict.
+    /* Longer castle token first to avoid prefix conflict with O-O.  */
     if (len >= 5 && memcmp(buffer, "O-O-O", 5) == 0) {
         out->type   = PIECE_KING;
         out->castle = SAN_CASTLE_Q;
-        
         return 1;
     }
-    
     if (len >= 3 && memcmp(buffer, "O-O", 3) == 0) {
         out->type   = PIECE_KING;
         out->castle = SAN_CASTLE_K;
-        
         return 1;
     }
 
-    // Consume the optional promotion suffix "=X" before further parsing, so the promotion
-    // letter cannot later be mistaken for the moving-piece prefix.
+    /* Strip "=X" before tokenising the body so X isn't mistaken for a
+       moving-piece prefix.  */
     if (len >= 2 && buffer[len-2] == '=') {
-        if (!parse_promo_piece(buffer[len-1], &out->promo))
+        if (!piece_from_letter(buffer[len-1], &out->promo, 0, 0))
             return 0;
-        
         len -= 2;
     }
 
-    // The remainder is the core move text: an optional piece letter, an optional
-    // disambiguator, and a destination square. Copy it into a working buffer with any
-    // 'x' capture marker removed so the remaining fields can be indexed positionally.
-    //
-    // Layout after the copy:
-    //   [piece letter?] [disambiguator: 0, 1, or 2 chars] [target file] [target rank]
+    /* Copy core into a working buffer with 'x' stripped so positional
+       parsing works. Layout afterward:
+         [piece letter?] [disambiguator 0..2 chars] [file] [rank]  */
     char   move[8];
     size_t move_len = 0;
-    
+
     for (size_t i = 0; i < len; ++i) {
         if (buffer[i] == 'x')
             continue;
-        
         if (move_len >= sizeof(move))
             return 0;
-        
         move[move_len++] = buffer[i];
     }
+
     if (move_len < 2)
         return 0;
 
-    // Optional leading piece letter; absence means a pawn move (already set above).
     size_t cursor = 0;
-    
-    if (parse_piece_letter(move[0], &out->type))
+    if (piece_from_letter(move[0], &out->type, 1, 0))
         cursor = 1;
 
-    // The target square always occupies the final two characters.
     if (move_len < cursor + 2)
         return 0;
-    
     if (!encode_square_0x88(move[move_len - 2], move[move_len - 1], &out->to))
         return 0;
 
-    // Anything sitting between the piece letter and the target square is a disambiguator.
     size_t disambig_len = move_len - cursor - 2;
 
     if (disambig_len == 0)
         return 1;
 
     if (disambig_len == 1) {
-        char disambig = move[cursor];
-        
-        if (disambig >= 'a' && disambig <= 'h')
-            out->from_file = disambig - 'a';
-        
-        else if (disambig >= '1' && disambig <= '8')
-            out->from_rank = disambig - '1';
-        
+        char d = move[cursor];
+        if      (d >= 'a' && d <= 'h') out->from_file = d - 'a';
+        else if (d >= '1' && d <= '8') out->from_rank = d - '1';
         else return 0;
-        
         return 1;
     }
 
     if (disambig_len == 2) {
-        char from_file_ch = move[cursor];
-        char from_rank_ch = move[cursor + 1];
-        
-        if (from_file_ch < 'a' || from_file_ch > 'h' || from_rank_ch < '1' || from_rank_ch > '8')
+        char f = move[cursor];
+        char r = move[cursor + 1];
+        if (f < 'a' || f > 'h' || r < '1' || r > '8')
             return 0;
-        
-        out->from_file = from_file_ch - 'a';
-        out->from_rank = from_rank_ch - '1';
-        
+        out->from_file = f - 'a';
+        out->from_rank = r - '1';
         return 1;
     }
 
     return 0;
 }
 
-// Walks the pseudolegal move list and returns the first move matching the parsed SAN, or NULL.
-// Promotion handling: if SAN specified =X the match requires MOVE_PROMO with that piece;
-// if SAN omitted =X on a promoting pawn move, we default to queen.
+/* Picks the first pseudolegal move matching the parsed SAN. Omitting "=X"
+   on a promoting pawn move defaults to queen.  */
 const struct move *
 match_san(const struct move_list *list, const struct san_move *sm, const uint8_t board[128])
 {
@@ -209,16 +176,12 @@ match_san(const struct move_list *list, const struct san_move *sm, const uint8_t
         const struct move *m = &list->moves[i];
 
         if (sm->castle == SAN_CASTLE_K) {
-            if (m->flags & MOVE_CASTLE_K)
-                return m;
-            
+            if (m->flags & MOVE_CASTLE_K) return m;
             continue;
         }
 
         if (sm->castle == SAN_CASTLE_Q) {
-            if (m->flags & MOVE_CASTLE_Q)
-                return m;
-            
+            if (m->flags & MOVE_CASTLE_Q) return m;
             continue;
         }
 
@@ -230,7 +193,6 @@ match_san(const struct move_list *list, const struct san_move *sm, const uint8_t
 
         if (sm->from_file != SAN_NONE && square_file(m->from) != sm->from_file)
             continue;
-        
         if (sm->from_rank != SAN_NONE && square_rank(m->from) != sm->from_rank)
             continue;
 
@@ -244,6 +206,104 @@ match_san(const struct move_list *list, const struct san_move *sm, const uint8_t
 
         return m;
     }
-    
+
     return NULL;
+}
+
+/* FEN fields: 1. placement (rank 8 first, '/' separators, digits = empties,
+   KQRBNP/kqrbnp), 2. side ('w'|'b'), 3. castling, 4. ep square or '-',
+   5. halfmove, 6. fullmove.  */
+int
+parse_fen(struct game *g, const char *fen)
+{
+    if (!fen) return -1;
+
+    memset(g->board, EMPTY, sizeof(g->board));
+
+    const char *p = fen;
+
+    int rank = 7;
+    int file = 0;
+    for (; *p && *p != ' '; ++p) {
+        char c = *p;
+
+        if (c == '/') {
+            if (file != 8 || rank == 0) return -1;
+            --rank;
+            file = 0;
+            continue;
+        }
+
+        if (c >= '1' && c <= '8') {
+            file += c - '0';
+            if (file > 8) return -1;
+            continue;
+        }
+
+        enum color      color;
+        enum piece_type type;
+
+        if      (c >= 'A' && c <= 'Z') color = COLOR_WHITE;
+        else if (c >= 'a' && c <= 'z') { color = COLOR_BLACK; c = (char)(c - 32); }
+        else return -1;
+
+        if (!piece_from_letter(c, &type, 1, 1)) return -1;
+
+        if (file >= 8) return -1;
+        g->board[(rank << 4) | file] = encode_piece(color, type);
+        ++file;
+    }
+    if (rank != 0 || file != 8) return -1;
+    if (*p++ != ' ') return -1;
+
+    if (*p == 'w')      g->turn = COLOR_WHITE;
+    else if (*p == 'b') g->turn = COLOR_BLACK;
+    else return -1;
+    ++p;
+    if (*p++ != ' ') return -1;
+
+    g->castling = 0;
+    if (*p == '-') {
+        ++p;
+    } else {
+        while (*p && *p != ' ') {
+            switch (*p) {
+                case 'K': g->castling |= CASTLE_WK; break;
+                case 'Q': g->castling |= CASTLE_WQ; break;
+                case 'k': g->castling |= CASTLE_BK; break;
+                case 'q': g->castling |= CASTLE_BQ; break;
+                default: return -1;
+            }
+            ++p;
+        }
+    }
+    if (*p++ != ' ') return -1;
+
+    if (*p == '-') {
+        g->ep_target = EP_NONE;
+        ++p;
+    } else {
+        if (p[0] < 'a' || p[0] > 'h') return -1;
+        if (p[1] < '1' || p[1] > '8') return -1;
+        g->ep_target = (uint8_t)(((p[1] - '1') << 4) | (p[0] - 'a'));
+        p += 2;
+    }
+    if (*p++ != ' ') return -1;
+
+    char *end = NULL;
+    long  hm  = strtol(p, &end, 10);
+    if (end == p || hm < 0 || hm > 255) return -1;
+    g->halfmove = (uint8_t)hm;
+    p = end;
+    if (*p++ != ' ') return -1;
+
+    long fm = strtol(p, &end, 10);
+    if (end == p || fm < 1 || fm > 65535) return -1;
+    g->fullmove = (uint16_t)fm;
+
+    zobrist_init(0);
+    g->hash = zobrist_compute(g);
+    compute_eval_state(g);
+
+    return 0;
 }

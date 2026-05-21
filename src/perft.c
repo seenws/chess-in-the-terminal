@@ -1,3 +1,6 @@
+/* perft.c -- movegen correctness benchmark: count leaves vs reference.
+   See https://www.chessprogramming.org/Perft_Results.  */
+
 #include <inttypes.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -8,21 +11,17 @@
 #include "board.h"
 #include "game.h"
 #include "movegen.h"
+#include "search.h"
 
-// Known leaf counts from the standard starting position. Length matches the
-// largest depth we verify by default; deeper depths are run but not checked
-// (the user passed the depth, they own it).
-//
-// Source: https://www.chessprogramming.org/Perft_Results
 static const uint64_t perft_reference[] = {
-    1ULL,           // depth 0
-    20ULL,          // depth 1
-    400ULL,         // depth 2
-    8902ULL,        // depth 3
-    197281ULL,      // depth 4
-    4865609ULL,     // depth 5
-    119060324ULL,   // depth 6
-    3195901860ULL   // depth 7
+    1ULL,           /* depth 0 */
+    20ULL,
+    400ULL,
+    8902ULL,
+    197281ULL,
+    4865609ULL,
+    119060324ULL,
+    3195901860ULL,
 };
 
 #define PERFT_REFERENCE_MAX_DEPTH \
@@ -47,42 +46,25 @@ perft(struct game *g, int depth)
 
     uint64_t nodes = 0;
     for (size_t i = 0; i < ml.count; ++i) {
-        struct game child = *g;
-        make_move(&child, &ml.moves[i]);
+        enum color mover = g->turn;
+        struct undo_state undo;
+        make_move(g, &ml.moves[i], &undo);
 
-        if (king_in_check(&child, g->turn))
+        if (king_in_check(g, mover)) {
+            unmake_move(g, &ml.moves[i], &undo);
             continue;
+        }
 
-        nodes += perft(&child, depth - 1);
+        nodes += perft(g, depth - 1);
+
+        unmake_move(g, &ml.moves[i], &undo);
     }
 
     return nodes;
 }
 
-static void
-move_to_uci_local(const struct move *m, char buf[6])
-{
-    static const char promo_chars[] = " pbnrqk";
-
-    buf[0] = (char)('a' + square_file(m->from));
-    buf[1] = (char)('1' + square_rank(m->from));
-    buf[2] = (char)('a' + square_file(m->to));
-    buf[3] = (char)('1' + square_rank(m->to));
-
-    if (m->promo != PIECE_NONE) {
-        buf[4] = promo_chars[m->promo];
-        buf[5] = '\0';
-    }
-    
-    else {
-        buf[4] = '\0'
-    }
-}
-
-// Perft divide: print one line per legal root move, with that move's
-// subtree leaf count at depth-1. The total at the bottom matches perft(g,
-// depth). This is the standard tool for narrowing a perft mismatch against a
-// reference engine: walk down the line whose subtotal disagrees.
+/* Per-root-move breakdown: standard tool for narrowing a perft mismatch
+   against a reference engine.  */
 static uint64_t
 perft_divide(struct game *g, int depth)
 {
@@ -96,18 +78,22 @@ perft_divide(struct game *g, int depth)
 
     uint64_t total = 0;
     for (size_t i = 0; i < ml.count; ++i) {
-        struct game child = *g;
-        make_move(&child, &ml.moves[i]);
+        enum color mover = g->turn;
+        struct undo_state undo;
+        make_move(g, &ml.moves[i], &undo);
 
-        if (king_in_check(&child, g->turn))
+        if (king_in_check(g, mover)) {
+            unmake_move(g, &ml.moves[i], &undo);
             continue;
+        }
 
-        uint64_t sub = perft(&child, depth - 1);
+        uint64_t sub = perft(g, depth - 1);
+        unmake_move(g, &ml.moves[i], &undo);
+
         total += sub;
 
         char uci[6];
-        
-        move_to_uci_local(&ml.moves[i], uci);
+        move_to_uci(&ml.moves[i], uci);
         printf("  %-6s %" PRIu64 "\n", uci, sub);
     }
 
@@ -131,26 +117,21 @@ main(int argc, char **argv)
     int divide    = 0;
 
     for (int i = 1; i < argc; ++i) {
-        if (strcmp(argv[i], "--divide") == 0)
+        if (strcmp(argv[i], "--divide") == 0) {
             divide = 1;
-        
-        else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
+        } else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
-            
             return 0;
-        }
-        
-        else {
+        } else {
             char *end = NULL;
             long v = strtol(argv[i], &end, 10);
-            
+
             if (end == argv[i] || *end != '\0' || v <= 0 || v > 16) {
                 fprintf(stderr, "perft: bad argument: %s\n", argv[i]);
                 print_usage(argv[0]);
-                
                 return 1;
             }
-            
+
             max_depth = (int)v;
         }
     }
@@ -191,14 +172,11 @@ main(int argc, char **argv)
         if (d <= PERFT_REFERENCE_MAX_DEPTH) {
             if (nodes == perft_reference[d])
                 status = "OK";
-            
             else {
                 status = "FAIL";
                 failed = 1;
             }
-        }
-        
-        else {
+        } else {
             status = "(no reference)";
         }
 

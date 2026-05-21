@@ -58,5 +58,15 @@ dkms.conf
 /citt
 /citt-debug
 /citt-perft
+/citt-bench
+/citt-uci
+/citt-uci-baseline*
 /tmovegen
 /build/
+
+# Local test harness (cutechess-cli clone)
+/tools/
+
+# Match artifacts (calibration sweeps, SPRT runs, ad-hoc PGN dumps)
+/*.pgn
+/*.log

@@ -7,8 +7,8 @@
 
 struct move;
 
-// Sentinel for ep_target meaning "no en passant capture available."
-// 0xFF fails on_board(), so attack/move generation needs no special-case branch.
+/* No-en-passant sentinel. 0xFF fails on_board() so movegen needs no
+   special case.  */
 #define EP_NONE 0xFF
 
 enum castle_rights {
@@ -19,20 +19,63 @@ enum castle_rights {
     CASTLE_ALL = CASTLE_WK | CASTLE_WQ | CASTLE_BK | CASTLE_BQ,
 };
 
+/* Incremental accumulators (material, psqt, phase, bishops, king_sq,
+   pawn_hash) are maintained by make_move/unmake_move; callers that mutate
+   board[] directly must call compute_eval_state to resync.  */
 struct game {
     uint8_t    board[128];
     enum color turn;
-    uint8_t    castling;   // bitmask of enum castle_rights
-    uint8_t    ep_target;  // 0x88 square, or EP_NONE
-    uint8_t    halfmove;   // plies since last pawn move or capture (50-move rule)
-    uint16_t   fullmove;   // increments after each black move, starts at 1
-    uint64_t   hash;       // Zobrist hash, kept in sync by make_move
-    uint8_t    ai_white;   // 1 -> engine plays white in game_step
-    uint8_t    ai_black;   // 1 -> engine plays black in game_step
+    uint8_t    castling;
+    uint8_t    ep_target;
+    uint8_t    halfmove;
+    uint16_t   fullmove;
+    uint64_t   hash;
+    int16_t    material[2];
+    int16_t    psqt_mg[2];
+    int16_t    psqt_eg[2];
+    int16_t    phase;
+    int8_t     bishops[2];
+    uint8_t    king_sq[2];
+    uint64_t   pawn_hash;
 };
 
-void game_init(struct game *g);
-int  game_step(struct game *g);
-void make_move(struct game *g, const struct move *m);
+/* Session-level CLI/UI configuration. Lives outside `struct game` because
+   it never changes during play and has no place in a position snapshot.  */
+struct ui_config {
+    uint8_t ai_white;
+    uint8_t ai_black;
+};
+
+/* Row of the castle_rights_clears table in game.c: a square whose change
+   of occupancy clears the given castling-rights mask.  */
+struct castle_rights_clear {
+    uint8_t sq;
+    uint8_t mask;
+};
+
+/* Pre-move snapshot for unmake_move. Sized small so per-node copies in
+   search stay cheap.  `captured` is board[m->to] before the move (EMPTY
+   for non-captures and en passant).  */
+struct undo_state {
+    uint64_t hash;
+    int16_t  material[2];
+    int16_t  psqt_mg[2];
+    int16_t  psqt_eg[2];
+    int16_t  phase;
+    int8_t   bishops[2];
+    uint8_t  king_sq[2];
+    uint64_t pawn_hash;
+    uint8_t  captured;
+    uint8_t  ep_target;
+    uint8_t  castling;
+    uint8_t  halfmove;
+};
+
+void game_init   (struct game *g);
+int  game_step   (struct game *g, const struct ui_config *cfg);
+void make_move   (struct game *g, const struct move *m, struct undo_state *undo);
+void unmake_move (struct game *g, const struct move *m, const struct undo_state *undo);
+
+void compute_eval_state(struct game *g);
 
 #endif

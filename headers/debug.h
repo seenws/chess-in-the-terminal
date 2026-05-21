@@ -4,8 +4,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-// DBG_PRINTF / DBG_ASSERT compile to nothing in release builds, so call
-// sites can be left in place without runtime cost when -DDEBUG is absent.
 #ifdef DEBUG
   #define DBG_PRINTF(...) do { fprintf(stderr, __VA_ARGS__); } while (0)
   #define DBG_ASSERT(x) do {                                                       \

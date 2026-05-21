@@ -1,3 +1,5 @@
+/* zobrist.c -- random key tables and full-position hash for the TT.  */
+
 #include <stdint.h>
 
 #include "board.h"
@@ -11,12 +13,12 @@ uint64_t z_side;
 
 static int zobrist_initialized = 0;
 
-// https://rosettacode.org/wiki/Pseudo-random_numbers/Splitmix64
+/* SplitMix64; see rosettacode.org/wiki/Pseudo-random_numbers/Splitmix64.  */
 static uint64_t
 splitmix64(uint64_t *s)
 {
     uint64_t z = (*s += 0x9E3779B97F4A7C15ULL);
-    
+
     z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
     z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
 
@@ -37,10 +39,10 @@ zobrist_init(uint64_t seed)
 
     for (int i = 0; i < 16; ++i)
         z_castle[i]  = splitmix64(&s);
-    
-    for (int i = 0; i < 8;  ++i)
+
+    for (int i = 0; i < 8; ++i)
         z_ep_file[i] = splitmix64(&s);
-    
+
     z_side = splitmix64(&s);
 
     zobrist_initialized = 1;
