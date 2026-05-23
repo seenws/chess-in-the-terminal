@@ -54,15 +54,11 @@ dkms.conf
 # debug information files
 *.dwo
 
-# Project binaries
-/citt
-/citt-debug
-/citt-perft
-/citt-bench
-/citt-uci
-/citt-uci-baseline*
-/tmovegen
+# Build outputs (all binaries, objects, and .d files live under build/).
 /build/
+
+# External reference build kept at root for SPRT/calibration vs current source.
+/citt-uci-baseline*
 
 # Local test harness (cutechess-cli clone)
 /tools/

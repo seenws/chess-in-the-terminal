@@ -52,13 +52,13 @@ cd chess-in-the-terminal
 make
 ```
 
-This produces a `citt` binary in the project root.
+This produces the binary at `build/bin/citt`. Every build target — release, debug, perft, bench, uci, and the test binaries — lands under `build/bin/`; nothing is written to the project root. `make clean` removes the whole `build/` tree.
 
 ---
 
 ## Playing
 ```bash
-usage: ./citt [-w] [-b] [-s] [-n PLIES]
+usage: ./build/bin/citt [-w] [-b] [-s] [-n PLIES]
   -w, --ai-white      engine plays white
   -b, --ai-black      engine plays black
   -s, --selfplay      engine plays both sides (alias for -w -b)
@@ -66,7 +66,7 @@ usage: ./citt [-w] [-b] [-s] [-n PLIES]
 default: human vs human
 ```
 
-`--selfplay` runs the engine against itself, useful for eyeballing search behavior or smoke-testing changes to evaluation or move generation. Because the engine does not (yet) enforce the 50-move or threefold-repetition draws, pair it with `-n` to bound debug runs, e.g. `./citt -s -n 80`.
+`--selfplay` runs the engine against itself, useful for eyeballing search behavior or smoke-testing changes to evaluation or move generation. Because the engine does not (yet) enforce the 50-move or threefold-repetition draws, pair it with `-n` to bound debug runs, e.g. `./build/bin/citt -s -n 80`.
 
 The board is printed after every move and you are prompted for input as the side to move. Enter moves in standard algebraic notation; the parser accepts:
 
@@ -101,7 +101,7 @@ The move generator also has a debug mode including further information about mov
 make debug
 ```
 
-This builds a `citt-debug` binary with `-g -O0 -DDEBUG`; run it as you would the release binary with `./citt-debug [-w] [-b]`. In debug builds `DBG_PRINTF` and `DBG_ASSERT` are live (Zobrist invariants are checked every turn, the search prints per-iteration stats), and `AI_DEFAULT_DEPTH` drops to 3 so the prints stay readable.
+This builds `build/bin/citt-debug` with `-g -O0 -DDEBUG`; run it as you would the release binary, e.g. `./build/bin/citt-debug [-w] [-b]`. In debug builds `DBG_PRINTF` and `DBG_ASSERT` are live (Zobrist invariants are checked every turn, the search prints per-iteration stats), and `AI_DEFAULT_DEPTH` drops to 3 so the prints stay readable.
 
 ---
 
@@ -113,11 +113,11 @@ The full move pipeline (pseudolegal generation, legality filter, castling, en pa
 make perft
 ```
 
-This builds a separate `citt-perft` binary at release optimization and runs it at the default depth of 5 (~4.9M nodes). Output is a per-depth table of node counts, wall time, kn/s, and OK/FAIL against the reference. Pass an explicit depth or `--divide` to the binary directly:
+This builds `build/bin/citt-perft` at release optimization and runs it at the default depth of 5 (~4.9M nodes). Output is a per-depth table of node counts, wall time, kn/s, and OK/FAIL against the reference. Pass an explicit depth or `--divide` to the binary directly:
 
 ```bash
-./citt-perft 4              # depths 1..4
-./citt-perft 5 --divide     # per-root-move subtotals at depth 5
+./build/bin/citt-perft 4              # depths 1..4
+./build/bin/citt-perft 5 --divide     # per-root-move subtotals at depth 5
 ```
 
 Perft divide is the standard tool for narrowing a perft mismatch against a reference engine: follow the line whose subtotal disagrees.
@@ -147,11 +147,11 @@ A search benchmark drives iterative deepening over a fixed suite of nine FEN pos
 make bench
 ```
 
-This builds `citt-bench` at release optimization and runs each position to depth 8 (overridable). Pass `-f "FEN"` to bench a single custom position instead of the suite.
+This builds `build/bin/citt-bench` at release optimization and runs each position to depth 8 (overridable). Pass `-f "FEN"` to bench a single custom position instead of the suite.
 
 ```bash
-./citt-bench 10                                 # depth 10 on the full suite
-./citt-bench -f "8/8/8/3k4/8/3K4/3P4/8 w - - 0 1" 12   # one position, depth 12
+./build/bin/citt-bench 10                                 # depth 10 on the full suite
+./build/bin/citt-bench -f "8/8/8/3k4/8/3K4/3P4/8 w - - 0 1" 12   # one position, depth 12
 ```
 
 Each row reports node count, wall time, kn/s, the engine's chosen best move, and its score. The TT and per-search ordering tables are wiped between rows so each position is reproducible.

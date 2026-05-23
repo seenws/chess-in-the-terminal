@@ -8,21 +8,22 @@ CITT (**Chess In The Terminal**) is a C99 chess engine with a terminal UI. Board
 
 ## Build & Test Commands
 
+All build outputs land in `build/bin/`; nothing is written to the project root. `make clean` removes the whole `build/` tree.
+
 **Compilation variants:**
-- `make` or `make release` — optimized binary (`citt`) with O2, NDEBUG
-- `make debug` — debug binary (`citt-debug`) with symbols, O0, DEBUG enabled (includes DBG_PRINTF/DBG_ASSERT and lower search depth 3)
-- `make clean` — remove all build artifacts
+- `make` or `make release` — optimized binary at `build/bin/citt` (O2, NDEBUG)
+- `make debug` — debug binary at `build/bin/citt-debug` (symbols, O0, DEBUG enabled — DBG_PRINTF/DBG_ASSERT live, search depth 3)
 
 **Testing:**
-- `make test` — move generator test suite (`tmovegen`, assertion-based)
-- `make test-see` — SEE (Static Exchange Evaluation) test (`tsee`)
+- `make test` — move generator test suite (`build/bin/tmovegen`, assertion-based)
+- `make test-see` — SEE (Static Exchange Evaluation) test (`build/bin/tsee`)
 - `make perft` — build & run perft validator vs reference leaf counts
-  - `./citt-perft [DEPTH] [--divide]` — depth override; `--divide` prints per-root-move subtotals for debugging movegen mismatches
+  - `./build/bin/citt-perft [DEPTH] [--divide]` — depth override; `--divide` prints per-root-move subtotals for debugging movegen mismatches
 - `make bench` — build & run search benchmark on 9-position suite
-  - `./citt-bench [DEPTH]` or `./citt-bench -f "FEN" [DEPTH]` — depth override or single-FEN bench
+  - `./build/bin/citt-bench [DEPTH]` or `./build/bin/citt-bench -f "FEN" [DEPTH]` — depth override or single-FEN bench
 
 **Interfaces:**
-- `make uci` — build UCI binary (`citt-uci`); speaks UCI protocol on stdin/stdout for testing vs other engines or external GUIs
+- `make uci` — build UCI binary at `build/bin/citt-uci`; speaks UCI protocol on stdin/stdout for testing vs other engines or external GUIs
 
 ## Architecture
 

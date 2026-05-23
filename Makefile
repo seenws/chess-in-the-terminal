@@ -24,6 +24,7 @@ DBG_DIR   = build/debug
 PERFT_DIR = build/perft
 BENCH_DIR = build/bench
 UCI_DIR   = build/uci
+BIN_DIR   = build/bin
 
 REL_OBJ   = $(SRC:src/%.c=$(REL_DIR)/%.o)
 DBG_OBJ   = $(SRC:src/%.c=$(DBG_DIR)/%.o)
@@ -35,14 +36,14 @@ UCI_OBJ   = $(UCI_SRC:src/%.c=$(UCI_DIR)/%.o)
 DEPS      = $(REL_OBJ:.o=.d) $(DBG_OBJ:.o=.d) $(PERFT_OBJ:.o=.d) \
             $(BENCH_OBJ:.o=.d) $(UCI_OBJ:.o=.d)
 
-REL_BIN   = citt
-DBG_BIN   = citt-debug
-PERFT_BIN = citt-perft
-BENCH_BIN = citt-bench
-UCI_BIN   = citt-uci
+REL_BIN   = $(BIN_DIR)/citt
+DBG_BIN   = $(BIN_DIR)/citt-debug
+PERFT_BIN = $(BIN_DIR)/citt-perft
+BENCH_BIN = $(BIN_DIR)/citt-bench
+UCI_BIN   = $(BIN_DIR)/citt-uci
 
-TEST_BIN  = tmovegen
-TSEE_BIN  = tsee
+TEST_BIN  = $(BIN_DIR)/tmovegen
+TSEE_BIN  = $(BIN_DIR)/tsee
 
 TSEE_SRC  = tests/tsee.c src/board.c src/parser.c src/movegen.c src/game.c \
             src/zobrist.c src/search.c src/attacks.c
@@ -55,9 +56,11 @@ release: $(REL_BIN)
 debug:   $(DBG_BIN)
 
 $(REL_BIN): $(REL_OBJ)
+	@mkdir -p $(@D)
 	$(CC) $(RELEASE_CFLAGS) -o $@ $^
 
 $(DBG_BIN): $(DBG_OBJ)
+	@mkdir -p $(@D)
 	$(CC) $(DEBUG_CFLAGS) -o $@ $^
 
 $(REL_DIR)/%.o: src/%.c
@@ -69,6 +72,7 @@ $(DBG_DIR)/%.o: src/%.c
 	$(CC) $(DEBUG_CFLAGS) -c -o $@ $<
 
 $(PERFT_BIN): $(PERFT_OBJ)
+	@mkdir -p $(@D)
 	$(CC) $(RELEASE_CFLAGS) -o $@ $^
 
 $(PERFT_DIR)/%.o: src/%.c
@@ -79,6 +83,7 @@ perft: $(PERFT_BIN)
 	./$(PERFT_BIN)
 
 $(BENCH_BIN): $(BENCH_OBJ)
+	@mkdir -p $(@D)
 	$(CC) $(RELEASE_CFLAGS) -o $@ $^
 
 $(BENCH_DIR)/%.o: src/%.c
@@ -89,6 +94,7 @@ bench: $(BENCH_BIN)
 	./$(BENCH_BIN)
 
 $(UCI_BIN): $(UCI_OBJ)
+	@mkdir -p $(@D)
 	$(CC) $(RELEASE_CFLAGS) -o $@ $^
 
 $(UCI_DIR)/%.o: src/%.c
@@ -99,18 +105,20 @@ $(UCI_DIR)/%.o: src/%.c
 uci: $(UCI_BIN)
 
 $(TEST_BIN): tests/tmovegen.c src/board.c src/attacks.c headers/board.h headers/game.h headers/movegen.h headers/attacks.h headers/bits.h
+	@mkdir -p $(@D)
 	$(CC) $(BASE_CFLAGS) -g -O0 -o $@ tests/tmovegen.c src/board.c src/attacks.c
 
 test: $(TEST_BIN)
 	./$(TEST_BIN)
 
 $(TSEE_BIN): $(TSEE_SRC)
+	@mkdir -p $(@D)
 	$(CC) $(BASE_CFLAGS) -g -O0 -o $@ $(TSEE_SRC)
 
 test-see: $(TSEE_BIN)
 	./$(TSEE_BIN)
 
 clean:
-	rm -rf build $(REL_BIN) $(DBG_BIN) $(PERFT_BIN) $(BENCH_BIN) $(UCI_BIN) $(TEST_BIN) $(TSEE_BIN)
+	rm -rf build
 
 -include $(DEPS)
