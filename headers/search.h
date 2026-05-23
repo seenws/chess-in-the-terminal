@@ -67,17 +67,35 @@ struct tt_entry {
     uint8_t  _pad;
 };
 
+/* (Re)allocates the transposition table to roughly `mb` megabytes,
+   rounded down to a power-of-two entry count. Existing contents are
+   discarded. Calling with the same size still re-zeroes the table.  */
 void tt_init       (size_t mb);
+
+/* Releases the TT. The table is unusable until tt_init is called again.  */
 void tt_free       (void);
+
+/* Zeroes every entry while keeping the allocation.  */
 void tt_clear      (void);
+
+/* Bumps the generation counter used by tt_store's replacement policy.  */
 void tt_new_search (void);
 
 /* SEE: signed centipawn outcome of the capture sequence on `m->to`,
    from the mover's perspective. Returns 0 for non-captures.  */
 int see(const uint8_t board[64], const struct move *m);
 
+/* Returns 1 when the stored entry is sufficient to cut off at this
+   alpha/beta window, in which case `*score_out` is written. Returns 0
+   otherwise. `move_out` (if not NULL) is filled whenever a matching
+   key is found, even on a 0 return, so the caller can use the stored
+   move for ordering.  */
 int  tt_probe (uint64_t key, int depth, int alpha, int beta,
                int *score_out, uint16_t *move_out);
+
+/* Stores into the slot keyed by `key`. Replacement policy keeps the
+   current entry only when it is from this same search AND deeper than
+   `depth`; otherwise the new entry overwrites.  */
 void tt_store (uint64_t key, int depth, int score,
                enum tt_bound bound, uint16_t move);
 

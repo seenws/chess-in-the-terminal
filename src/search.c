@@ -427,7 +427,7 @@ collect_pawn_info(const struct game *g, struct pawn_info *pi)
 }
 
 static struct pawn_eval
-evaluate_pawn_structure(const struct game *g, const struct pawn_info *pi)
+evaluate_doubled_isolated(const struct pawn_info *pi)
 {
     int mg = 0;
     int eg = 0;
@@ -452,6 +452,19 @@ evaluate_pawn_structure(const struct game *g, const struct pawn_info *pi)
             }
         }
     }
+
+    struct pawn_eval pe = { mg, eg };
+    return pe;
+}
+
+/* A white pawn at (file, rank) is passed iff no black pawn on the
+   adjacent or same files is at a rank > rank, i.e. could block or
+   capture it on its push path. Symmetric for black.  */
+static struct pawn_eval
+evaluate_passed_pawns(const struct game *g, const struct pawn_info *pi)
+{
+    int mg = 0;
+    int eg = 0;
 
     for (int rank = 1; rank < 7; ++rank) {
         for (int file = 0; file < 8; ++file) {
@@ -486,6 +499,16 @@ evaluate_pawn_structure(const struct game *g, const struct pawn_info *pi)
     }
 
     struct pawn_eval pe = { mg, eg };
+    return pe;
+}
+
+static struct pawn_eval
+evaluate_pawn_structure(const struct game *g, const struct pawn_info *pi)
+{
+    struct pawn_eval di = evaluate_doubled_isolated(pi);
+    struct pawn_eval pp = evaluate_passed_pawns(g, pi);
+
+    struct pawn_eval pe = { di.mg + pp.mg, di.eg + pp.eg };
     return pe;
 }
 
@@ -716,10 +739,69 @@ see_find_lva(const uint8_t board[64], int to, enum color side, int *from_out)
     return PIECE_NONE;
 }
 
+/* Iteratively applies the least-valuable attacker on `to`, alternating
+   sides. Returns the final swap-off depth d; gain[1..d] is filled.
+   The king is allowed to recapture only when no enemy defender
+   remains, since recapturing into check is illegal.  */
+static int
+see_swap_off(uint8_t board[64], int to, enum color side,
+             enum piece_type attacker_type, int *gain)
+{
+    int d = 0;
+
+    while (1) {
+        int             lva_from;
+        enum piece_type lva_type = see_find_lva(board, to, side, &lva_from);
+
+        if (lva_type == PIECE_NONE)
+            break;
+
+        if (lva_type == PIECE_KING) {
+            uint8_t saved = board[lva_from];
+            board[lva_from] = EMPTY;
+
+            int             dummy_from;
+            enum piece_type def = see_find_lva(board, to,
+                                               (side == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE,
+                                               &dummy_from);
+            if (def != PIECE_NONE) {
+                board[lva_from] = saved;
+                break;
+            }
+        }
+
+        d++;
+        gain[d] = piece_value[attacker_type] - gain[d - 1];
+
+        board[to]       = board[lva_from];
+        board[lva_from] = EMPTY;
+        attacker_type   = lva_type;
+        side            = (side == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
+    }
+
+    return d;
+}
+
+/* Reverse-pass minimax: each side picks the better of "stop now" and
+   "continue the swap-off". Final score lands in gain[0].  */
+static int
+see_unfold_gain(int *gain, int d)
+{
+    while (d > 0) {
+        int stand_pat = -gain[d - 1];
+        int continue_ = gain[d];
+
+        gain[d - 1] = -(stand_pat > continue_ ? stand_pat : continue_);
+        --d;
+    }
+    return gain[0];
+}
+
 int
 see(const uint8_t live_board[64], const struct move *m)
 {
-    if (!(m->flags & MOVE_CAPTURE)) return 0;
+    if (!(m->flags & MOVE_CAPTURE))
+        return 0;
 
     uint8_t board[64];
     memcpy(board, live_board, sizeof(board));
@@ -729,7 +811,6 @@ see(const uint8_t live_board[64], const struct move *m)
     const enum color mover = piece_color(board[from]);
 
     int gain[32];
-    int d = 0;
 
     enum piece_type victim_type = (m->flags & MOVE_ENP)
         ? PIECE_PAWN
@@ -752,44 +833,10 @@ see(const uint8_t live_board[64], const struct move *m)
         board[cap_sq] = EMPTY;
     }
 
-    enum color side = (mover == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
+    enum color defender = (mover == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
+    int d = see_swap_off(board, to, defender, attacker_type, gain);
 
-    while (1) {
-        int             lva_from;
-        enum piece_type lva_type = see_find_lva(board, to, side, &lva_from);
-        if (lva_type == PIECE_NONE) break;
-
-        if (lva_type == PIECE_KING) {
-            uint8_t saved = board[lva_from];
-            board[lva_from] = EMPTY;
-
-            int             dummy_from;
-            enum piece_type def = see_find_lva(board, to,
-                                               (side == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE,
-                                               &dummy_from);
-            if (def != PIECE_NONE) {
-                board[lva_from] = saved;
-                break;
-            }
-        }
-
-        d++;
-        gain[d] = piece_value[attacker_type] - gain[d-1];
-
-        board[to]       = board[lva_from];
-        board[lva_from] = EMPTY;
-        attacker_type   = lva_type;
-        side            = (side == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
-    }
-
-    while (d > 0) {
-        int a = -gain[d-1];
-        int b =  gain[d];
-        gain[d-1] = -(a > b ? a : b);
-        d--;
-    }
-
-    return gain[0];
+    return see_unfold_gain(gain, d);
 }
 
 /* Score ranges (highest first):

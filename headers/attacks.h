@@ -5,6 +5,8 @@
 
 #include "board.h"
 
+/* Must be called once per process before any query below. Idempotent;
+   safe to call from multiple entry points.  */
 void attacks_init(void);
 
 uint64_t pawn_attacks   (int sq, enum color c);

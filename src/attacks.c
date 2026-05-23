@@ -1,13 +1,4 @@
-/* attacks.c -- precomputed leaper attacks and magic-bitboard sliders.
-
-   Slider attacks use a per-square perfect hash: given the relevant
-   blocker bitboard b, the attack set is
-       table[sq][((occ & mask[sq]) * magic[sq]) >> shift[sq]]
-   where mask[sq] excludes edge squares the slider cannot be blocked at,
-   magic[sq] is a constant searched at init that maps every blocker
-   subset of mask[sq] to a unique table slot, and shift[sq] is
-   64 - popcount(mask[sq]). The tables are filled in attacks_init.  */
-
+/* attacks.c -- precomputed leaper attacks and magic-bitboard sliders. */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,8 +8,6 @@
 #include "bits.h"
 #include "board.h"
 
-/* (rank_delta, file_delta) pairs used to fill the leaper tables and
-   walk the slider rays.  */
 static const int knight_deltas[8][2] = {
     {+2,+1},{+2,-1},{-2,+1},{-2,-1},{+1,+2},{+1,-2},{-1,+2},{-1,-2}
 };
@@ -28,32 +17,23 @@ static const int king_deltas[8][2] = {
 static const int bishop_dirs[4][2] = { {+1,+1},{+1,-1},{-1,+1},{-1,-1} };
 static const int rook_dirs  [4][2] = { {+1, 0},{-1, 0},{ 0,+1},{ 0,-1} };
 
-/* Squares a knight on sq attacks.  */
 static uint64_t knight_table[64];
-/* Squares a king on sq attacks.  */
 static uint64_t king_table[64];
-/* Squares a pawn of color c on sq attacks (diagonally forward).  */
 static uint64_t pawn_table[2][64];
 
-/* Slider blocker-relevance masks. Edge squares are excluded because a
-   blocker on an edge does not change what lies beyond.  */
 static uint64_t bishop_mask[64];
 static uint64_t rook_mask  [64];
 
-/* Magic numbers and right-shifts used to index the per-square attack
-   tables. The shift is always 64 - popcount(mask[sq]).  */
 static uint64_t bishop_magic[64];
 static uint64_t rook_magic  [64];
 static int      bishop_shift[64];
 static int      rook_shift  [64];
 
-/* Slider attack tables, "fancy magic" layout: a single contiguous
-   block per piece, with each square pointing to its own variable-sized
-   region of 2^popcount(mask[sq]) entries. The totals 5248 and 102400
-   are the well-known sums over all 64 squares for chess geometry; a
-   runtime check in attacks_init verifies we filled exactly that many
-   entries. Compared to a fixed [64][1 << 12] layout, this halves the
-   working set and keeps slider queries in L1/L2 on most CPUs.  */
+/* "Fancy magic" layout: per-square variable-sized regions carved out
+   of a single contiguous block. The totals are the known sums of
+   2^popcount(mask[sq]) over all 64 squares for chess geometry; a
+   fixed [64][1 << 12] layout would more than double the working set
+   and miss L2 on this class of CPU.  */
 #define BISHOP_ATTACK_TABLE_SIZE   5248
 #define ROOK_ATTACK_TABLE_SIZE   102400
 static uint64_t  bishop_attack_data[BISHOP_ATTACK_TABLE_SIZE];
@@ -61,11 +41,8 @@ static uint64_t  rook_attack_data  [ROOK_ATTACK_TABLE_SIZE];
 static uint64_t *bishop_attack_ptr[64];
 static uint64_t *rook_attack_ptr  [64];
 
-/* Set once the tables are filled; guards against repeat init.  */
 static int tables_ready = 0;
 
-/* leaper_mask: union of every in-bounds (sq + delta) for the given
-   delta list. Used to fill the knight and king tables.  */
 static uint64_t
 leaper_mask(int sq, const int deltas[][2], int n)
 {
@@ -85,10 +62,7 @@ leaper_mask(int sq, const int deltas[][2], int n)
     return m;
 }
 
-/* ray_attacks: ground-truth attack bitboard for a slider at sq given
-   the full occupancy `occ`. Each ray includes the first occupied square
-   (a possible capture) and stops there. Used during init by find_magic
-   and not on the search hot path.  */
+/* Each ray stops at and includes the first occupied square.  */
 static uint64_t
 ray_attacks(int sq, uint64_t occ, const int dirs[][2], int n_dirs)
 {
@@ -116,9 +90,8 @@ ray_attacks(int sq, uint64_t occ, const int dirs[][2], int n_dirs)
     return attacks;
 }
 
-/* slider_mask: blocker-relevance squares for a slider at sq. Excludes
-   the final ray square in each direction because a blocker there
-   cannot change what the slider reaches beyond.  */
+/* Excludes the last square on each ray: a blocker there cannot change
+   what the slider reaches beyond.  */
 static uint64_t
 slider_mask(int sq, const int dirs[][2], int n_dirs)
 {
@@ -147,10 +120,8 @@ slider_mask(int sq, const int dirs[][2], int n_dirs)
     return m;
 }
 
-/* mask_subset: returns the `idx`-th subset of `mask`. Walks the set
-   bits of mask from low to high and adopts each into the result iff
-   the matching low bit of idx is set. Enumerates all 2^popcount(mask)
-   subsets as idx ranges over [0, 2^popcount(mask)).  */
+/* Enumerates all 2^popcount(mask) subsets of `mask` as `idx` ranges
+   over [0, 2^popcount(mask)).  */
 static uint64_t
 mask_subset(uint64_t mask, int idx)
 {
@@ -167,8 +138,6 @@ mask_subset(uint64_t mask, int idx)
     return result;
 }
 
-/* xorshift64: small deterministic PRNG used to enumerate magic-number
-   candidates. Deterministic across runs given the same seed.  */
 static uint64_t
 xorshift64(uint64_t *state)
 {
@@ -182,25 +151,18 @@ xorshift64(uint64_t *state)
     return x;
 }
 
-/* sparse_candidate: ANDs three PRNG outputs. Magics with few set bits
-   have fewer multiply carries and are more likely to perfect-hash the
-   blocker subsets; this is the standard candidate generator.  */
+/* Magics with few set bits perfect-hash slider blocker subsets more
+   reliably (fewer carries in the multiply), so we AND three samples.  */
 static uint64_t
 sparse_candidate(uint64_t *state)
 {
     return xorshift64(state) & xorshift64(state) & xorshift64(state);
 }
 
-/* find_magic: searches for a magic number that maps every blocker
-   subset of `mask` to a unique slot in `table[0 .. (1 << popcount(mask)) - 1]`,
-   with each slot holding the corresponding attack bitboard. Returns
-   the magic and writes the shift to *shift_out.
-
-   `table[key] == 0` is treated as "slot unused": a slider always
-   attacks at least one square, so a genuine attack set is never zero.
-
-   Aborts on failure; magic numbers are known to exist for every chess
-   slider mask, so a failure indicates a bug in this routine.  */
+/* Treats `table[key] == 0` as "slot unused"; a slider always attacks
+   at least one square, so a genuine attack set is never zero. A magic
+   is known to exist for every chess slider mask, so failure to find
+   one would indicate a bug here.  */
 static uint64_t
 find_magic(int sq, uint64_t mask, const int dirs[][2], int n_dirs,
            uint64_t *table, int *shift_out)
@@ -209,8 +171,7 @@ find_magic(int sq, uint64_t mask, const int dirs[][2], int n_dirs,
     int n     = 1 << bits;
     int shift = 64 - bits;
 
-    /* Sized for the worst case (rook = 12 bits) so the same buffer is
-       reusable across both piece types.  */
+    /* Worst case is rook = 12 bits; same buffer fits both piece types.  */
     uint64_t blockers[1 << 12];
     uint64_t attacks [1 << 12];
 
@@ -219,9 +180,8 @@ find_magic(int sq, uint64_t mask, const int dirs[][2], int n_dirs,
         attacks [i] = ray_attacks(sq, blockers[i], dirs, n_dirs);
     }
 
-    /* Seed mixes the square index so each search runs an independent
-       sequence; same seed on each invocation makes the chosen magic
-       deterministic across runs.  */
+    /* Seed mixes `sq` so each square searches an independent sequence,
+       and is fixed so the chosen magic is deterministic across runs.  */
     uint64_t state = 0x9E3779B97F4A7C15ULL ^ ((uint64_t)sq * 0xBF58476D1CE4E5B9ULL);
 
     for (int tries = 0; tries < 100000000; ++tries) {
@@ -257,7 +217,6 @@ attacks_init(void)
     if (tables_ready)
         return;
 
-    /* Leaper tables.  */
     for (int sq = 0; sq < 64; ++sq) {
         knight_table[sq] = leaper_mask(sq, knight_deltas, 8);
         king_table[sq]   = leaper_mask(sq, king_deltas,   8);
@@ -281,9 +240,6 @@ attacks_init(void)
         pawn_table[COLOR_BLACK][sq] = b;
     }
 
-    /* Slider magic tables. Per-square pointers carve the contiguous
-       data blocks into variable-sized regions sized to each square's
-       blocker subset count.  */
     size_t bishop_offset = 0;
     size_t rook_offset   = 0;
 
@@ -305,7 +261,6 @@ attacks_init(void)
         rook_offset += rook_entries;
     }
 
-    /* Sanity-check the hardcoded totals against the actual fill.  */
     if (bishop_offset != BISHOP_ATTACK_TABLE_SIZE
         || rook_offset != ROOK_ATTACK_TABLE_SIZE) {
         fprintf(stderr,

@@ -6,7 +6,7 @@ CITT (**Chess In The Terminal**) is a lightweight chess game written in C99, bui
 
 ## How it works
 
-The board is represented using [0x88 encoding](https://en.wikipedia.org/wiki/0x88), a 128-byte array that functions as two adjacent 8x8 boards. The left half holds the game state, the right half makes off-board detection branchless: if a square index has bit 3 of the upper nibble set (`sq & 0x88`), it's off the board.
+The board is represented as a 64-byte mailbox (`uint8_t board[64]`) running alongside a set of [bitboards](https://www.chessprogramming.org/Bitboards): per `[color][piece_type]` plus per-color and total occupancy. The mailbox answers "what's on this square?" in one load; the bitboards answer "where are all my knights?" in one load and let attack generation work in bulk. Squares are indexed [little-endian rank-file](https://www.chessprogramming.org/Square_Mapping_Considerations#Little-Endian_Rank-File_Mapping) (a1=0, h8=63). Each square byte encodes a piece as:
 
 ```
 bit: 7 6 5 4 3 2 1 0
@@ -16,7 +16,11 @@ e.g. black rook  = 0b00001100
      white queen = 0b00000101
 ```
 
-Moves are represented as a struct encoding origin, destination, and a bitmask of flags for captures, castling, en passant, and promotion. Each turn the engine generates the side-to-move's legal moves (pseudolegal moves filtered by a copy-make king-safety check), parses the user's SAN input, matches it against that list, and applies the matching move. Castling generation enforces all three legality conditions (not in check, no pass-through-check, no into-check) at generation time.
+Sliding-piece attacks (bishop, rook, queen) use [fancy magic bitboards](https://www.chessprogramming.org/Magic_Bitboards): per-square magic multipliers index into per-square attack tables keyed by the relevant occupancy. Leaper attacks (pawn, knight, king) are plain precomputed lookups. All tables are built once at startup by `attacks_init()`.
+
+Moves are a struct encoding origin, destination, and a bitmask of flags for captures, castling, en passant, and promotion. Each turn the engine generates the side-to-move's legal moves (pseudolegal moves filtered by a make/unmake king-safety check), parses the user's SAN input, matches it against that list, and applies the matching move. Castling generation enforces all three legality conditions (not in check, no pass-through-check, no into-check) at generation time.
+
+`make_move` and `unmake_move` keep the mailbox, the bitboards, and the incremental eval accumulators (material, PSQT, phase, bishop counts, king squares, Zobrist, pawn Zobrist) in sync. Direct mutation of `board[]` — FEN load and similar — must be followed by `compute_eval_state()` to rebuild everything else.
 
 ### Search
 
@@ -131,7 +135,7 @@ depth  nodes              time(s)    knps         status
 6      119060324          14.037     8482.2       OK
 ```
 
-Movegen sustains ~8–16 Mnps depending on position density, competitive with other 0x88 mailbox engines.
+Movegen sustains ~8–16 Mnps depending on position density.
 
 ---
 

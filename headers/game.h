@@ -17,6 +17,11 @@ enum castle_rights {
     CASTLE_ALL = CASTLE_WK | CASTLE_WQ | CASTLE_BK | CASTLE_BQ,
 };
 
+/* Invariant: the bitboards (pieces/occ/occ_all) and the incremental
+   accumulators (hash, material, psqt, phase, bishops, king_sq,
+   pawn_hash) all describe the same position as board[]. make_move and
+   unmake_move maintain this. A caller that mutates board[] directly
+   must call compute_eval_state to resync the rest.  */
 struct game {
     uint8_t    board[64];
 
@@ -71,9 +76,21 @@ struct undo_state {
 
 void game_init   (struct game *g);
 int  game_step   (struct game *g, const struct ui_config *cfg);
+
+/* Applies `m` to `g` and writes the inverse into `*undo`. Caller owns
+   `undo` (typically a stack local); it must live until the matching
+   unmake_move. Pseudolegal moves are accepted; legality is the
+   caller's responsibility.  */
 void make_move   (struct game *g, const struct move *m, struct undo_state *undo);
+
+/* Reverses the most recent make_move. `m` and `undo` must be the pair
+   handed to that make_move; using a different `m` or a stale `undo`
+   silently corrupts `g`.  */
 void unmake_move (struct game *g, const struct move *m, const struct undo_state *undo);
 
+/* Rebuilds bitboards and incremental accumulators from board[]. Call
+   after any direct mutation of board[] (e.g. FEN load) before searching
+   or evaluating.  */
 void compute_eval_state(struct game *g);
 
 #endif /* CITT_HEADERS_GAME_H_ */
