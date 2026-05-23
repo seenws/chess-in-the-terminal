@@ -126,6 +126,33 @@ change to make/unmake, movegen, search, or board mutation.
   checks (bitboard consistency every turn in `src/game.c`, key drift in
   `src/search.c`), and `AI_DEFAULT_DEPTH = 3`.
 
+## Strength testing (self-play / SPRT)
+
+Perft and bench prove correctness and speed, not playing strength. Any change
+meant to affect strength (search, ordering, eval, pruning) must be validated by
+self-play against a pinned baseline before it is accepted — a green bench is
+necessary but not sufficient.
+
+The harness lives in `tools/` (gitignored, not in version control):
+
+- `tools/cutechess/build/cutechess-cli` — the match runner.
+- `tools/sprt.sh` — runs an SPRT match of the dev engine vs the baseline.
+- `tools/openings.pgn` — opening book; `tools/sprt.{log,pgn}` — last run's output.
+
+`sprt.sh` cd's to the repo root and compares two UCI binaries *by path
+convention*: `./citt-uci` (engine under test) vs `./citt-uci-baseline` (pinned
+reference, gitignored). `make uci` builds to `build/bin/citt-uci`, so the dev
+binary must be copied to the repo root first. Workflow:
+
+1. `make uci`
+2. `cp build/bin/citt-uci ./citt-uci` — refresh the dev binary.
+3. `./tools/sprt.sh` — SPRT at `tc=8+0.08`, `elo0=0 elo1=10`,
+   `alpha=beta=0.05`, streaming to `tools/sprt.log` (watch for the
+   `H1 accepted` / `H0 accepted` verdict; Ctrl-C to stop early).
+
+Only when a change is confirmed a gain, promote it to the new reference:
+`cp ./citt-uci ./citt-uci-baseline`. Never overwrite the baseline otherwise.
+
 ## Conventions & review — where the detailed guidance lives
 
 This project prioritizes correctness, maintainability, readability,
