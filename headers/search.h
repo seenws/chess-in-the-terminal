@@ -38,8 +38,8 @@ struct pst_pair { int16_t mg; int16_t eg; };
 static inline struct pst_pair
 pst_lookup(enum color c, enum piece_type t, int sq)
 {
-    int rank = sq >> 4;
-    int file = sq & 7;
+    int rank = rank_of(sq);
+    int file = file_of(sq);
     int row  = (c == COLOR_WHITE) ? (7 - rank) : rank;
     int idx  = (row << 3) | file;
 
@@ -74,7 +74,7 @@ void tt_new_search (void);
 
 /* SEE: signed centipawn outcome of the capture sequence on `m->to`,
    from the mover's perspective. Returns 0 for non-captures.  */
-int see(const uint8_t board[128], const struct move *m);
+int see(const uint8_t board[64], const struct move *m);
 
 int  tt_probe (uint64_t key, int depth, int alpha, int beta,
                int *score_out, uint16_t *move_out);

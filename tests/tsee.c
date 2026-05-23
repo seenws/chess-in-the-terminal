@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "attacks.h"
 #include "board.h"
 #include "game.h"
 #include "movegen.h"
@@ -30,8 +31,8 @@ parse_uci_move(const struct game *g, const char *uci, struct move *out)
     if (ff < 0 || ff > 7 || fr < 0 || fr > 7 ||
         tf < 0 || tf > 7 || tr < 0 || tr > 7) return -1;
 
-    int from = (fr << 4) | ff;
-    int to   = (tr << 4) | tf;
+    int from = make_sq(fr, ff);
+    int to   = make_sq(tr, tf);
 
     out->from  = (uint8_t)from;
     out->to    = (uint8_t)to;
@@ -144,8 +145,8 @@ static const struct see_case cases[] = {
 static const char *
 square_name(int sq, char buf[3])
 {
-    buf[0] = 'a' + square_file(sq);
-    buf[1] = '1' + square_rank(sq);
+    buf[0] = 'a' + file_of(sq);
+    buf[1] = '1' + rank_of(sq);
     buf[2] = '\0';
     return buf;
 }
@@ -153,6 +154,8 @@ square_name(int sq, char buf[3])
 int
 main(void)
 {
+    attacks_init();
+
     int pass = 0, fail = 0;
     size_t n = sizeof(cases) / sizeof(cases[0]);
 

@@ -255,10 +255,10 @@ move_to_uci(const struct move *m, char buf[6])
     /* Lower-case promotion suffix indexed by piece_type; index 0 unused.  */
     static const char promo_chars[] = " pbnrqk";
 
-    buf[0] = (char)('a' + square_file(m->from));
-    buf[1] = (char)('1' + square_rank(m->from));
-    buf[2] = (char)('a' + square_file(m->to));
-    buf[3] = (char)('1' + square_rank(m->to));
+    buf[0] = (char)('a' + file_of(m->from));
+    buf[1] = (char)('1' + rank_of(m->from));
+    buf[2] = (char)('a' + file_of(m->to));
+    buf[3] = (char)('1' + rank_of(m->to));
 
     if (m->promo != PIECE_NONE) {
         buf[4] = promo_chars[m->promo];
@@ -414,7 +414,7 @@ collect_pawn_info(const struct game *g, struct pawn_info *pi)
 
     for (int rank = 1; rank < 7; ++rank) {
         for (int file = 0; file < 8; ++file) {
-            uint8_t p = g->board[(rank << 4) | file];
+            uint8_t p = g->board[make_sq(rank, file)];
             if (is_empty(p))                 continue;
             if (piece_type(p) != PIECE_PAWN) continue;
 
@@ -455,7 +455,7 @@ evaluate_pawn_structure(const struct game *g, const struct pawn_info *pi)
 
     for (int rank = 1; rank < 7; ++rank) {
         for (int file = 0; file < 8; ++file) {
-            uint8_t p = g->board[(rank << 4) | file];
+            uint8_t p = g->board[make_sq(rank, file)];
             if (is_empty(p))                 continue;
             if (piece_type(p) != PIECE_PAWN) continue;
 
@@ -497,7 +497,7 @@ evaluate_rook_files(const struct game *g, const struct pawn_info *pi)
 
     for (int rank = 0; rank < 8; ++rank) {
         for (int file = 0; file < 8; ++file) {
-            uint8_t p = g->board[(rank << 4) | file];
+            uint8_t p = g->board[make_sq(rank, file)];
             if (is_empty(p))                 continue;
             if (piece_type(p) != PIECE_ROOK) continue;
 
@@ -525,8 +525,8 @@ evaluate_king_shield(const struct game *g, const struct pawn_info *pi)
 
     for (int c = 0; c < 2; ++c) {
         int king_sq = g->king_sq[c];
-        int k_file  = square_file(king_sq);
-        int k_rank  = square_rank(king_sq);
+        int k_file  = file_of(king_sq);
+        int k_rank  = rank_of(king_sq);
 
         int dir   = (c == COLOR_WHITE) ?  1 : -1;
         int rank1 = k_rank + dir;
@@ -539,14 +539,14 @@ evaluate_king_shield(const struct game *g, const struct pawn_info *pi)
             if (f < 0 || f > 7) continue;
 
             if (rank1 >= 1 && rank1 <= 6) {
-                uint8_t p = g->board[(rank1 << 4) | f];
+                uint8_t p = g->board[make_sq(rank1, f)];
                 if (!is_empty(p)
                     && piece_type(p) == PIECE_PAWN
                     && piece_color(p) == (enum color)c)
                     side_mg += KING_SHIELD_RANK1;
             }
             if (rank2 >= 1 && rank2 <= 6) {
-                uint8_t p = g->board[(rank2 << 4) | f];
+                uint8_t p = g->board[make_sq(rank2, f)];
                 if (!is_empty(p)
                     && piece_type(p) == PIECE_PAWN
                     && piece_color(p) == (enum color)c)
@@ -626,103 +626,102 @@ mover_in_check(const struct game *g)
     return king_in_check(g, moved);
 }
 
-/* 0x88 offset tables duplicated here so see() does not depend on movegen
-   internals; keep these in sync with movegen.c.  */
-/* Eight knight steps.  */
-static const int8_t see_knight_offsets[8] = { -33, -31, -18, -14, 14, 18, 31, 33 };
-/* Eight king steps.  */
-static const int8_t see_king_offsets  [8] = { -17, -16, -15,  -1,  1, 15, 16, 17 };
-/* Four bishop diagonal rays.  */
-static const int8_t see_bishop_offsets[4] = { -17, -15, 15, 17 };
-/* Four rook orthogonal rays.  */
-static const int8_t see_rook_offsets  [4] = { -16,  -1,  1, 16 };
+/* (rank_delta, file_delta) pairs for leapers and slider rays.  */
+static const int knight_deltas[8][2] = {
+    {+2,+1},{+2,-1},{-2,+1},{-2,-1},{+1,+2},{+1,-2},{-1,+2},{-1,-2}
+};
+static const int king_deltas[8][2] = {
+    {+1,-1},{+1,0},{+1,+1},{0,-1},{0,+1},{-1,-1},{-1,0},{-1,+1}
+};
+static const int bishop_dirs[4][2] = { {+1,+1},{+1,-1},{-1,+1},{-1,-1} };
+static const int rook_dirs  [4][2] = { {+1, 0},{-1, 0},{ 0,+1},{ 0,-1} };
+
+/* Walks each ray in `dirs`; if the first occupied square holds `target`,
+   sets *from_out and returns 1.  */
+static int
+see_scan_slider(const uint8_t board[64], int to,
+                const int dirs[][2], int n_dirs,
+                uint8_t target, int *from_out)
+{
+    int tr = rank_of(to);
+    int tf = file_of(to);
+
+    for (int d = 0; d < n_dirs; ++d) {
+        int r = tr, f = tf;
+        while (1) {
+            r += dirs[d][0];
+            f += dirs[d][1];
+            if (r < 0 || r > 7 || f < 0 || f > 7) break;
+            int sq = make_sq(r, f);
+            uint8_t b = board[sq];
+            if (!is_empty(b)) {
+                if (b == target) { *from_out = sq; return 1; }
+                break;
+            }
+        }
+    }
+    return 0;
+}
 
 /* Returns the least-valuable piece of `side` attacking `to` and sets
    `*from_out` to its square; PIECE_NONE if none. Queens are scanned after
    their matching slider class to preserve LVA ordering.  */
 static enum piece_type
-see_find_lva(const uint8_t board[128], int to, enum color side, int *from_out)
+see_find_lva(const uint8_t board[64], int to, enum color side, int *from_out)
 {
-    const int     pawn_step = (side == COLOR_WHITE) ? -16 : 16;
-    const uint8_t pawn_byte = encode_piece(side, PIECE_PAWN);
+    int tr = rank_of(to);
+    int tf = file_of(to);
 
-    int sq = to + pawn_step - 1;
-    if (on_board(sq) && board[sq] == pawn_byte) { *from_out = sq; return PIECE_PAWN; }
-    sq = to + pawn_step + 1;
-    if (on_board(sq) && board[sq] == pawn_byte) { *from_out = sq; return PIECE_PAWN; }
+    const int     pawn_dr   = (side == COLOR_WHITE) ? -1 : 1;
+    const uint8_t pawn_byte = encode_piece(side, PIECE_PAWN);
+    {
+        int r = tr + pawn_dr;
+        if (r >= 0 && r <= 7) {
+            for (int df = -1; df <= 1; df += 2) {
+                int f = tf + df;
+                if (f < 0 || f > 7) continue;
+                int sq = make_sq(r, f);
+                if (board[sq] == pawn_byte) { *from_out = sq; return PIECE_PAWN; }
+            }
+        }
+    }
 
     const uint8_t knight_byte = encode_piece(side, PIECE_KNIGHT);
     for (int i = 0; i < 8; ++i) {
-        sq = to + see_knight_offsets[i];
-        if (on_board(sq) && board[sq] == knight_byte) { *from_out = sq; return PIECE_KNIGHT; }
+        int r = tr + knight_deltas[i][0];
+        int f = tf + knight_deltas[i][1];
+        if (r < 0 || r > 7 || f < 0 || f > 7) continue;
+        int sq = make_sq(r, f);
+        if (board[sq] == knight_byte) { *from_out = sq; return PIECE_KNIGHT; }
     }
 
     const uint8_t bishop_byte = encode_piece(side, PIECE_BISHOP);
+    const uint8_t rook_byte   = encode_piece(side, PIECE_ROOK);
     const uint8_t queen_byte  = encode_piece(side, PIECE_QUEEN);
 
-    for (int i = 0; i < 4; ++i) {
-        sq = to + see_bishop_offsets[i];
-        while (on_board(sq)) {
-            uint8_t b = board[sq];
-            if (!is_empty(b)) {
-                if (b == bishop_byte) { *from_out = sq; return PIECE_BISHOP; }
-                break;
-            }
-            sq += see_bishop_offsets[i];
-        }
-    }
-
-    const uint8_t rook_byte = encode_piece(side, PIECE_ROOK);
-    for (int i = 0; i < 4; ++i) {
-        sq = to + see_rook_offsets[i];
-        while (on_board(sq)) {
-            uint8_t b = board[sq];
-            if (!is_empty(b)) {
-                if (b == rook_byte) { *from_out = sq; return PIECE_ROOK; }
-                break;
-            }
-            sq += see_rook_offsets[i];
-        }
-    }
-
-    for (int i = 0; i < 4; ++i) {
-        sq = to + see_bishop_offsets[i];
-        while (on_board(sq)) {
-            uint8_t b = board[sq];
-            if (!is_empty(b)) {
-                if (b == queen_byte) { *from_out = sq; return PIECE_QUEEN; }
-                break;
-            }
-            sq += see_bishop_offsets[i];
-        }
-    }
-    for (int i = 0; i < 4; ++i) {
-        sq = to + see_rook_offsets[i];
-        while (on_board(sq)) {
-            uint8_t b = board[sq];
-            if (!is_empty(b)) {
-                if (b == queen_byte) { *from_out = sq; return PIECE_QUEEN; }
-                break;
-            }
-            sq += see_rook_offsets[i];
-        }
-    }
+    if (see_scan_slider(board, to, bishop_dirs, 4, bishop_byte, from_out)) return PIECE_BISHOP;
+    if (see_scan_slider(board, to, rook_dirs,   4, rook_byte,   from_out)) return PIECE_ROOK;
+    if (see_scan_slider(board, to, bishop_dirs, 4, queen_byte,  from_out)) return PIECE_QUEEN;
+    if (see_scan_slider(board, to, rook_dirs,   4, queen_byte,  from_out)) return PIECE_QUEEN;
 
     const uint8_t king_byte = encode_piece(side, PIECE_KING);
     for (int i = 0; i < 8; ++i) {
-        sq = to + see_king_offsets[i];
-        if (on_board(sq) && board[sq] == king_byte) { *from_out = sq; return PIECE_KING; }
+        int r = tr + king_deltas[i][0];
+        int f = tf + king_deltas[i][1];
+        if (r < 0 || r > 7 || f < 0 || f > 7) continue;
+        int sq = make_sq(r, f);
+        if (board[sq] == king_byte) { *from_out = sq; return PIECE_KING; }
     }
 
     return PIECE_NONE;
 }
 
 int
-see(const uint8_t live_board[128], const struct move *m)
+see(const uint8_t live_board[64], const struct move *m)
 {
     if (!(m->flags & MOVE_CAPTURE)) return 0;
 
-    uint8_t board[128];
+    uint8_t board[64];
     memcpy(board, live_board, sizeof(board));
 
     const int        to    = m->to;
@@ -749,7 +748,7 @@ see(const uint8_t live_board[128], const struct move *m)
     board[from] = EMPTY;
 
     if (m->flags & MOVE_ENP) {
-        int cap_sq = to + (mover == COLOR_WHITE ? -16 : 16);
+        int cap_sq = to + (mover == COLOR_WHITE ? -8 : 8);
         board[cap_sq] = EMPTY;
     }
 
@@ -801,7 +800,7 @@ see(const uint8_t live_board[128], const struct move *m)
              0..HISTORY_MAX  quiet history
       -100 000+ losing captures (SEE < 0), pushed below quiets.  */
 static int
-score_move(const struct move *m, const uint8_t board[128], uint16_t tt_move, int ply)
+score_move(const struct move *m, const uint8_t board[64], uint16_t tt_move, int ply)
 {
     uint16_t packed = move_pack(m);
 
@@ -841,7 +840,7 @@ score_move(const struct move *m, const uint8_t board[128], uint16_t tt_move, int
 }
 
 static void
-score_moves(const struct move_list *ml, const uint8_t board[128],
+score_moves(const struct move_list *ml, const uint8_t board[64],
             uint16_t tt_move, int ply, int *scores)
 {
     for (size_t i = 0; i < ml->count; ++i)
@@ -1049,7 +1048,7 @@ negamax(struct game *g, int depth, int ply, int alpha, int beta, int can_null)
         uint8_t  saved_ep   = g->ep_target;
 
         if (saved_ep != EP_NONE)
-            g->hash ^= z_ep_file[square_file(saved_ep)];
+            g->hash ^= z_ep_file[file_of(saved_ep)];
         g->ep_target = EP_NONE;
         g->turn      = (g->turn == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
         g->hash     ^= z_side;

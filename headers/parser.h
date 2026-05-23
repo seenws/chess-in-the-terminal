@@ -32,7 +32,7 @@ int    parse_san (char const *buffer, size_t bufsz, struct san_move *out);
 
 const struct move *match_san(const struct move_list *list,
                              const struct san_move *sm,
-                             const uint8_t board[128]);
+                             const uint8_t board[64]);
 
 /* Returns 0 on success, -1 on parse error. On error `g` is left in an
    inconsistent state and should be discarded.  */

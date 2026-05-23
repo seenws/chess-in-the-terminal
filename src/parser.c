@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "bits.h"
 #include "board.h"
 #include "game.h"
 #include "movegen.h"
@@ -59,12 +60,12 @@ piece_from_letter(char c, enum piece_type *out, int allow_king, int allow_pawn)
 }
 
 static int
-encode_square_0x88(char file_ch, char rank_ch, uint8_t *out)
+encode_square(char file_ch, char rank_ch, uint8_t *out)
 {
     if (file_ch < 'a' || file_ch > 'h' || rank_ch < '1' || rank_ch > '8')
         return 0;
 
-    *out = ((uint8_t)(rank_ch - '1') << 4) | (uint8_t)(file_ch - 'a');
+    *out = (uint8_t)make_sq(rank_ch - '1', file_ch - 'a');
     return 1;
 }
 
@@ -133,7 +134,7 @@ parse_san(char const *buffer, size_t bufsz, struct san_move *out)
 
     if (move_len < cursor + 2)
         return 0;
-    if (!encode_square_0x88(move[move_len - 2], move[move_len - 1], &out->to))
+    if (!encode_square(move[move_len - 2], move[move_len - 1], &out->to))
         return 0;
 
     size_t disambig_len = move_len - cursor - 2;
@@ -165,7 +166,7 @@ parse_san(char const *buffer, size_t bufsz, struct san_move *out)
 /* Returns the first move in `list` matching `sm`, or NULL. Omitting "=X"
    on a promoting pawn move means queen.  */
 const struct move *
-match_san(const struct move_list *list, const struct san_move *sm, const uint8_t board[128])
+match_san(const struct move_list *list, const struct san_move *sm, const uint8_t board[64])
 {
     for (size_t i = 0; i < list->count; ++i) {
         const struct move *m = &list->moves[i];
@@ -186,9 +187,9 @@ match_san(const struct move_list *list, const struct san_move *sm, const uint8_t
         if (piece_type(board[m->from]) != sm->type)
             continue;
 
-        if (sm->from_file != SAN_NONE && square_file(m->from) != sm->from_file)
+        if (sm->from_file != SAN_NONE && file_of(m->from) != sm->from_file)
             continue;
-        if (sm->from_rank != SAN_NONE && square_rank(m->from) != sm->from_rank)
+        if (sm->from_rank != SAN_NONE && rank_of(m->from) != sm->from_rank)
             continue;
 
         if (sm->promo != PIECE_NONE) {
@@ -245,7 +246,7 @@ parse_fen(struct game *g, const char *fen)
         if (!piece_from_letter(c, &type, 1, 1)) return -1;
 
         if (file >= 8) return -1;
-        g->board[(rank << 4) | file] = encode_piece(color, type);
+        g->board[make_sq(rank, file)] = encode_piece(color, type);
         ++file;
     }
     if (rank != 0 || file != 8) return -1;
@@ -280,7 +281,7 @@ parse_fen(struct game *g, const char *fen)
     } else {
         if (p[0] < 'a' || p[0] > 'h') return -1;
         if (p[1] < '1' || p[1] > '8') return -1;
-        g->ep_target = (uint8_t)(((p[1] - '1') << 4) | (p[0] - 'a'));
+        g->ep_target = (uint8_t)make_sq(p[1] - '1', p[0] - 'a');
         p += 2;
     }
     if (*p++ != ' ') return -1;

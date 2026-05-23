@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "attacks.h"
 #include "game.h"
 
 static void
@@ -11,12 +12,23 @@ print_usage(const char *prog)
 {
     fprintf(stderr,
             "usage: %s [-w] [-b] [-s] [-n PLIES]\n"
+            "  -v, --version       CITT version and information\n"
             "  -w, --ai-white      engine plays white\n"
             "  -b, --ai-black      engine plays black\n"
             "  -s, --selfplay      engine plays both sides (alias for -w -b)\n"
             "  -n, --max-plies N   stop after N plies (0 = unlimited; debug aid for self-play)\n"
             "default: human vs human\n",
             prog);
+}
+
+static void
+print_version_info(void)
+{
+    puts("Chess in the Terminal (CITT) - A shell-interactive chess engine written in C99.");
+    puts("Copyright (C) 2026 Sinan Olsson-Pasic");
+    puts("Version: 1.1"); /* Officially 1.1 once bitboard implementation is finished */
+    puts("License: MIT License");
+    puts("This is free software: you are free to change and redistribute it.");
 }
 
 int
@@ -26,6 +38,7 @@ main(int argc, char **argv)
     struct ui_config cfg       = { 0 };
     int              max_plies = 0;
 
+    attacks_init();
     game_init(&g);
 
     for (int i = 1; i < argc; ++i) {
@@ -55,6 +68,12 @@ main(int argc, char **argv)
 
         else if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
+
+            return 0;
+        }
+
+        else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--version") == 0) {
+            print_version_info();
 
             return 0;
         }

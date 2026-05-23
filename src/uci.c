@@ -7,6 +7,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "attacks.h"
+#include "bits.h"
 #include "board.h"
 #include "game.h"
 #include "movegen.h"
@@ -67,8 +69,8 @@ apply_uci_move(struct game *g, const char *uci)
      || tf < 0 || tf > 7 || tr < 0 || tr > 7)
         return -1;
 
-    uint8_t from = (uint8_t)((fr << 4) | ff);
-    uint8_t to   = (uint8_t)((tr << 4) | tf);
+    uint8_t from = (uint8_t)make_sq(fr, ff);
+    uint8_t to   = (uint8_t)make_sq(tr, tf);
 
     enum piece_type promo = PIECE_NONE;
     if (uci[4] != '\0') {
@@ -308,6 +310,8 @@ cmd_ucinewgame(void)
 void
 uci_loop(void)
 {
+    attacks_init();
+
     char line[UCI_LINE_MAX];
 
     /* GUIs need immediate visibility of our replies; disable stdout buffering.  */

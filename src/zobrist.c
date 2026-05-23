@@ -2,11 +2,12 @@
 
 #include <stdint.h>
 
+#include "bits.h"
 #include "board.h"
 #include "game.h"
 #include "zobrist.h"
 
-uint64_t z_piece[16][128];
+uint64_t z_piece[16][64];
 uint64_t z_castle[16];
 uint64_t z_ep_file[8];
 uint64_t z_side;
@@ -36,7 +37,7 @@ zobrist_init(uint64_t seed)
     uint64_t s = seed ? seed : 0xD1B54A32D192ED03ULL;
 
     for (int p = 0; p < 16; ++p)
-        for (int sq = 0; sq < 128; ++sq)
+        for (int sq = 0; sq < 64; ++sq)
             z_piece[p][sq] = splitmix64(&s);
 
     for (int i = 0; i < 16; ++i)
@@ -55,22 +56,17 @@ zobrist_compute(const struct game *g)
 {
     uint64_t hash = 0;
 
-    for (int sq = 0; sq < 128; ++sq) {
-        if (!on_board(sq))
-            continue;
-
+    for (int sq = 0; sq < 64; ++sq) {
         uint8_t p = g->board[sq];
-
         if (is_empty(p))
             continue;
-
         hash ^= z_piece[p][sq];
     }
 
     hash ^= z_castle[g->castling & 0xF];
 
-    if (g->ep_target != EP_NONE && on_board(g->ep_target))
-        hash ^= z_ep_file[square_file(g->ep_target)];
+    if (g->ep_target != EP_NONE)
+        hash ^= z_ep_file[file_of(g->ep_target)];
 
     if (g->turn == COLOR_BLACK)
         hash ^= z_side;

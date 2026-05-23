@@ -8,6 +8,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "attacks.h"
 #include "board.h"
 #include "game.h"
 #include "movegen.h"
@@ -135,6 +136,8 @@ main(int argc, char **argv)
             max_depth = (int)v;
         }
     }
+
+    attacks_init();
 
     struct game g;
     game_init(&g);

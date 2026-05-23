@@ -7,6 +7,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "attacks.h"
 #include "game.h"
 #include "parser.h"
 #include "search.h"
@@ -79,6 +80,8 @@ bench_one(const char *label, const struct game *seed, int depth,
 int
 main(int argc, char **argv)
 {
+    attacks_init();
+
     int         depth  = 8;
     const char *single = NULL;
 

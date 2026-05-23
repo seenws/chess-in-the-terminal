@@ -7,17 +7,17 @@ RELEASE_CFLAGS = $(BASE_CFLAGS) -O2 -DNDEBUG
 DEBUG_CFLAGS   = $(BASE_CFLAGS) -g -O0 -DDEBUG
 
 SRC = src/main.c src/board.c src/parser.c src/movegen.c src/game.c \
-      src/zobrist.c src/search.c
+      src/zobrist.c src/search.c src/attacks.c
 
 PERFT_SRC = src/perft.c src/board.c src/parser.c src/movegen.c src/game.c \
-            src/zobrist.c src/search.c
+            src/zobrist.c src/search.c src/attacks.c
 
 
 BENCH_SRC = src/bench.c src/board.c src/parser.c src/movegen.c src/game.c \
-            src/zobrist.c src/search.c
+            src/zobrist.c src/search.c src/attacks.c
 
 UCI_SRC   = src/uci.c src/board.c src/parser.c src/movegen.c src/game.c \
-            src/zobrist.c src/search.c
+            src/zobrist.c src/search.c src/attacks.c
 
 REL_DIR   = build/release
 DBG_DIR   = build/debug
@@ -45,7 +45,7 @@ TEST_BIN  = tmovegen
 TSEE_BIN  = tsee
 
 TSEE_SRC  = tests/tsee.c src/board.c src/parser.c src/movegen.c src/game.c \
-            src/zobrist.c src/search.c
+            src/zobrist.c src/search.c src/attacks.c
 
 .PHONY: all release debug clean test test-see perft bench uci
 
@@ -98,8 +98,8 @@ $(UCI_DIR)/%.o: src/%.c
 # Just builds; meant to be driven by an external GUI / test harness over pipes.
 uci: $(UCI_BIN)
 
-$(TEST_BIN): tests/tmovegen.c src/board.c headers/board.h headers/game.h headers/movegen.h
-	$(CC) $(BASE_CFLAGS) -g -O0 -o $@ tests/tmovegen.c src/board.c
+$(TEST_BIN): tests/tmovegen.c src/board.c src/attacks.c headers/board.h headers/game.h headers/movegen.h headers/attacks.h headers/bits.h
+	$(CC) $(BASE_CFLAGS) -g -O0 -o $@ tests/tmovegen.c src/board.c src/attacks.c
 
 test: $(TEST_BIN)
 	./$(TEST_BIN)

@@ -6,8 +6,8 @@
 #include "../src/movegen.c"
 
 /* board_init / board_print are linked from src/board.c by the Makefile. */
-void board_init(uint8_t board[128]);
-void board_print(const uint8_t board[128]);
+void board_init(uint8_t board[64]);
+void board_print(const uint8_t board[64]);
 
 /* ---------- debug helpers ----------
  * These are non-static so you can call them from gdb on any move list, e.g.:
@@ -22,8 +22,8 @@ void board_print(const uint8_t board[128]);
 static void
 square_to_algebraic(int sq, char out[3])
 {
-    out[0] = 'a' + square_file(sq);
-    out[1] = '1' + square_rank(sq);
+    out[0] = 'a' + file_of(sq);
+    out[1] = '1' + rank_of(sq);
     out[2] = '\0';
 }
 
@@ -68,6 +68,26 @@ setup_empty(struct game *g)
     g->ep_target = EP_NONE;
 }
 
+/* Recomputes the piece bitboards from board[]; the tests write pieces
+   into the mailbox directly, so we sync before calling movegen.  */
+static void
+sync_bitboards(struct game *g)
+{
+    memset(g->pieces, 0, sizeof(g->pieces));
+    g->occ[0] = g->occ[1] = 0;
+    g->occ_all = 0;
+
+    for (int sq = 0; sq < 64; ++sq) {
+        uint8_t p = g->board[sq];
+        if (is_empty(p))
+            continue;
+        uint64_t b = bit_of(sq);
+        g->pieces[piece_color(p)][piece_type(p)] |= b;
+        g->occ[piece_color(p)]                   |= b;
+        g->occ_all                               |= b;
+    }
+}
+
 /* ---------- tests ----------
  * Each test is independent. Set a breakpoint on the test function in gdb and
  * step into append_pseudolegal_moves to watch the move list grow.
@@ -82,8 +102,9 @@ test_lone_knight_d4(void)
     struct move_list list = { 0 };
     setup_empty(&g);
 
-    g.board[0x33] = encode_piece(COLOR_WHITE, PIECE_KNIGHT);
+    g.board[27] = encode_piece(COLOR_WHITE, PIECE_KNIGHT);  /* d4 */
     board_print(g.board);
+    sync_bitboards(&g);
     append_pseudolegal_moves(&g, &list);
     print_move_list(&list);
 
@@ -99,8 +120,9 @@ test_lone_bishop_d4(void)
     struct move_list list = { 0 };
     setup_empty(&g);
 
-    g.board[0x33] = encode_piece(COLOR_WHITE, PIECE_BISHOP);
+    g.board[27] = encode_piece(COLOR_WHITE, PIECE_BISHOP);  /* d4 */
     board_print(g.board);
+    sync_bitboards(&g);
     append_pseudolegal_moves(&g, &list);
     print_move_list(&list);
 
@@ -116,8 +138,9 @@ test_lone_rook_d4(void)
     struct move_list list = { 0 };
     setup_empty(&g);
 
-    g.board[0x33] = encode_piece(COLOR_WHITE, PIECE_ROOK);
+    g.board[27] = encode_piece(COLOR_WHITE, PIECE_ROOK);  /* d4 */
     board_print(g.board);
+    sync_bitboards(&g);
     append_pseudolegal_moves(&g, &list);
     print_move_list(&list);
 
@@ -133,8 +156,9 @@ test_lone_queen_d4(void)
     struct move_list list = { 0 };
     setup_empty(&g);
 
-    g.board[0x33] = encode_piece(COLOR_WHITE, PIECE_QUEEN);
+    g.board[27] = encode_piece(COLOR_WHITE, PIECE_QUEEN);  /* d4 */
     board_print(g.board);
+    sync_bitboards(&g);
     append_pseudolegal_moves(&g, &list);
     print_move_list(&list);
 
@@ -150,8 +174,9 @@ test_lone_king_d4(void)
     struct move_list list = { 0 };
     setup_empty(&g);
 
-    g.board[0x33] = encode_piece(COLOR_WHITE, PIECE_KING);
+    g.board[27] = encode_piece(COLOR_WHITE, PIECE_KING);  /* d4 */
     board_print(g.board);
+    sync_bitboards(&g);
     append_pseudolegal_moves(&g, &list);
     print_move_list(&list);
 
@@ -167,8 +192,9 @@ test_pawn_e2_start(void)
     struct move_list list = { 0 };
     setup_empty(&g);
 
-    g.board[0x14] = encode_piece(COLOR_WHITE, PIECE_PAWN);  /* e2 */
+    g.board[12] = encode_piece(COLOR_WHITE, PIECE_PAWN);  /* e2 */
     board_print(g.board);
+    sync_bitboards(&g);
     append_pseudolegal_moves(&g, &list);
     print_move_list(&list);
 
@@ -184,9 +210,10 @@ test_pawn_capture(void)
     struct move_list list = { 0 };
     setup_empty(&g);
 
-    g.board[0x14] = encode_piece(COLOR_WHITE, PIECE_PAWN);  /* e2 */
-    g.board[0x23] = encode_piece(COLOR_BLACK, PIECE_PAWN);  /* d3 */
+    g.board[12] = encode_piece(COLOR_WHITE, PIECE_PAWN);  /* e2 */
+    g.board[19] = encode_piece(COLOR_BLACK, PIECE_PAWN);  /* d3 */
     board_print(g.board);
+    sync_bitboards(&g);
     append_pseudolegal_moves(&g, &list);
     print_move_list(&list);
 
@@ -202,8 +229,9 @@ test_pawn_promo_e7(void)
     struct move_list list = { 0 };
     setup_empty(&g);
 
-    g.board[0x64] = encode_piece(COLOR_WHITE, PIECE_PAWN);  /* e7 */
+    g.board[52] = encode_piece(COLOR_WHITE, PIECE_PAWN);  /* e7 */
     board_print(g.board);
+    sync_bitboards(&g);
     append_pseudolegal_moves(&g, &list);
     print_move_list(&list);
 
@@ -222,10 +250,11 @@ test_pawn_en_passant(void)
     struct move_list list = { 0 };
     setup_empty(&g);
 
-    g.board[0x44] = encode_piece(COLOR_WHITE, PIECE_PAWN);  /* e5 */
-    g.board[0x43] = encode_piece(COLOR_BLACK, PIECE_PAWN);  /* d5 (the pawn we'd capture) */
-    g.ep_target   = 0x53;                                   /* d6 */
+    g.board[36] = encode_piece(COLOR_WHITE, PIECE_PAWN);  /* e5 */
+    g.board[35] = encode_piece(COLOR_BLACK, PIECE_PAWN);  /* d5 (the pawn we'd capture) */
+    g.ep_target = 43;                                     /* d6 */
     board_print(g.board);
+    sync_bitboards(&g);
     append_pseudolegal_moves(&g, &list);
     print_move_list(&list);
 
@@ -249,6 +278,7 @@ test_initial_position(void)
 
     board_init(g.board);
     board_print(g.board);
+    sync_bitboards(&g);
     append_pseudolegal_moves(&g, &list);
     print_move_list(&list);
 
@@ -258,6 +288,8 @@ test_initial_position(void)
 int
 main(void)
 {
+    attacks_init();
+
     test_lone_knight_d4();
     test_lone_bishop_d4();
     test_lone_rook_d4();

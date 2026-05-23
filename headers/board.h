@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <assert.h>
 
+#include "bits.h"
+
 #define EMPTY 0
 
 enum color {
@@ -20,14 +22,6 @@ enum piece_type {
     PIECE_QUEEN,
     PIECE_KING
 };
-
-/* 0x88 board: valid squares have (sq & 0x88) == 0; off-board sentinels fail
-   that test, so movegen never special-cases edges.  */
-static inline int
-on_board(int sq)
-{
-    return (sq & 0x88) == 0;
-}
 
 /* Piece byte layout: bit 3 = color, bits 0..2 = piece_type.  */
 static inline uint8_t
@@ -51,24 +45,12 @@ piece_type(uint8_t p)
 }
 
 static inline int
-square_rank(int sq)
-{
-    return sq >> 4;
-}
-
-static inline int
-square_file(int sq)
-{
-    return sq & 0x7;
-}
-
-static inline int
 is_empty(uint8_t sq)
 {
     return sq == EMPTY;
 }
 
-void board_init  (uint8_t board[128]);
-void board_print (const uint8_t board[128]);
+void board_init  (uint8_t board[64]);
+void board_print (const uint8_t board[64]);
 
 #endif /* CITT_HEADERS_BOARD_H_ */

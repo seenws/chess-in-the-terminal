@@ -7,7 +7,6 @@
 
 struct move;
 
-/* No-en-passant sentinel; fails on_board() so movegen needs no special case.  */
 #define EP_NONE 0xFF
 
 enum castle_rights {
@@ -18,11 +17,14 @@ enum castle_rights {
     CASTLE_ALL = CASTLE_WK | CASTLE_WQ | CASTLE_BK | CASTLE_BQ,
 };
 
-/* Incremental accumulators (material, psqt, phase, bishops, king_sq,
-   pawn_hash) are maintained by make_move/unmake_move; a caller that
-   mutates board[] directly must call compute_eval_state to resync.  */
 struct game {
-    uint8_t    board[128];
+    uint8_t    board[64];
+
+    /* Piece bitboards indexed by [color][piece_type]; type 0 unused.  */
+    uint64_t   pieces[2][7];
+    uint64_t   occ[2];
+    uint64_t   occ_all;
+
     enum color turn;
     uint8_t    castling;
     uint8_t    ep_target;

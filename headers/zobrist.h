@@ -6,7 +6,7 @@
 struct game;
 
 /* Random key per (piece byte, square), XORed into the position hash.  */
-extern uint64_t z_piece[16][128];
+extern uint64_t z_piece[16][64];
 /* Random key per castling-rights mask (4 bits → 16 entries).  */
 extern uint64_t z_castle[16];
 /* Random key per en-passant file (used only when an ep_target is set).  */

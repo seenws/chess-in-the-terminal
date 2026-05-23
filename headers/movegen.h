@@ -56,8 +56,7 @@ void append_pseudolegal_moves (const struct game *g, struct move_list *list);
    make/unmake internally.  */
 void append_legal_moves       (struct game *g, struct move_list *list);
 
-int  square_attacked (const uint8_t board[128], int target_sq, enum color by_color);
-int  find_king       (const uint8_t board[128], enum color c);
+int  square_attacked (const struct game *g, int target_sq, enum color by_color);
 int  king_in_check   (const struct game *g, enum color side);
 
 #endif /* CITT_HEADERS_MOVEGEN_H_ */
