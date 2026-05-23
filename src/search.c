@@ -8,6 +8,7 @@
 #include <assert.h>
 #include <time.h>
 
+#include "attacks.h"
 #include "board.h"
 #include "debug.h"
 #include "game.h"
@@ -412,13 +413,13 @@ collect_pawn_info(const struct game *g, struct pawn_info *pi)
             pi->min_rank[c][f] =  8;
         }
 
-    for (int rank = 1; rank < 7; ++rank) {
-        for (int file = 0; file < 8; ++file) {
-            uint8_t p = g->board[make_sq(rank, file)];
-            if (is_empty(p))                 continue;
-            if (piece_type(p) != PIECE_PAWN) continue;
+    for (int c = 0; c < 2; ++c) {
+        uint64_t pawns = g->pieces[c][PIECE_PAWN];
+        while (pawns) {
+            int sq   = pop_lsb(&pawns);
+            int file = file_of(sq);
+            int rank = rank_of(sq);
 
-            enum color c = piece_color(p);
             pi->count[c][file]++;
             if (rank > pi->max_rank[c][file]) pi->max_rank[c][file] = (int8_t)rank;
             if (rank < pi->min_rank[c][file]) pi->min_rank[c][file] = (int8_t)rank;
@@ -466,35 +467,37 @@ evaluate_passed_pawns(const struct game *g, const struct pawn_info *pi)
     int mg = 0;
     int eg = 0;
 
-    for (int rank = 1; rank < 7; ++rank) {
-        for (int file = 0; file < 8; ++file) {
-            uint8_t p = g->board[make_sq(rank, file)];
-            if (is_empty(p))                 continue;
-            if (piece_type(p) != PIECE_PAWN) continue;
+    uint64_t white = g->pieces[COLOR_WHITE][PIECE_PAWN];
+    while (white) {
+        int sq   = pop_lsb(&white);
+        int file = file_of(sq);
+        int rank = rank_of(sq);
 
-            enum color c = piece_color(p);
+        int blk_F  =              pi->max_rank[COLOR_BLACK][file];
+        int blk_Fm = (file > 0) ? pi->max_rank[COLOR_BLACK][file - 1] : -1;
+        int blk_Fp = (file < 7) ? pi->max_rank[COLOR_BLACK][file + 1] : -1;
 
-            if (c == COLOR_WHITE) {
-                int blk_F  =              pi->max_rank[COLOR_BLACK][file];
-                int blk_Fm = (file > 0) ? pi->max_rank[COLOR_BLACK][file - 1] : -1;
-                int blk_Fp = (file < 7) ? pi->max_rank[COLOR_BLACK][file + 1] : -1;
+        if (blk_F <= rank && blk_Fm <= rank && blk_Fp <= rank) {
+            int adv = rank - 1;
+            mg += passed_pawn_mg[adv];
+            eg += passed_pawn_eg[adv];
+        }
+    }
 
-                if (blk_F <= rank && blk_Fm <= rank && blk_Fp <= rank) {
-                    int adv = rank - 1;
-                    mg += passed_pawn_mg[adv];
-                    eg += passed_pawn_eg[adv];
-                }
-            } else {
-                int blk_F  =              pi->min_rank[COLOR_WHITE][file];
-                int blk_Fm = (file > 0) ? pi->min_rank[COLOR_WHITE][file - 1] : 8;
-                int blk_Fp = (file < 7) ? pi->min_rank[COLOR_WHITE][file + 1] : 8;
+    uint64_t black = g->pieces[COLOR_BLACK][PIECE_PAWN];
+    while (black) {
+        int sq   = pop_lsb(&black);
+        int file = file_of(sq);
+        int rank = rank_of(sq);
 
-                if (blk_F >= rank && blk_Fm >= rank && blk_Fp >= rank) {
-                    int adv = 6 - rank;
-                    mg -= passed_pawn_mg[adv];
-                    eg -= passed_pawn_eg[adv];
-                }
-            }
+        int blk_F  =              pi->min_rank[COLOR_WHITE][file];
+        int blk_Fm = (file > 0) ? pi->min_rank[COLOR_WHITE][file - 1] : 8;
+        int blk_Fp = (file < 7) ? pi->min_rank[COLOR_WHITE][file + 1] : 8;
+
+        if (blk_F >= rank && blk_Fm >= rank && blk_Fp >= rank) {
+            int adv = 6 - rank;
+            mg -= passed_pawn_mg[adv];
+            eg -= passed_pawn_eg[adv];
         }
     }
 
@@ -518,15 +521,15 @@ evaluate_rook_files(const struct game *g, const struct pawn_info *pi)
     int mg = 0;
     int eg = 0;
 
-    for (int rank = 0; rank < 8; ++rank) {
-        for (int file = 0; file < 8; ++file) {
-            uint8_t p = g->board[make_sq(rank, file)];
-            if (is_empty(p))                 continue;
-            if (piece_type(p) != PIECE_ROOK) continue;
+    for (int c = 0; c < 2; ++c) {
+        const enum color oppo_c = (c == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
+        uint64_t         rooks  = g->pieces[c][PIECE_ROOK];
 
-            enum color c    = piece_color(p);
-            int        mine = pi->count[c][file];
-            int        oppo = pi->count[(c == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE][file];
+        while (rooks) {
+            int sq   = pop_lsb(&rooks);
+            int file = file_of(sq);
+            int mine = pi->count[c][file];
+            int oppo = pi->count[oppo_c][file];
 
             int bonus = 0;
             if (mine == 0)
@@ -547,9 +550,10 @@ evaluate_king_shield(const struct game *g, const struct pawn_info *pi)
     int mg = 0;
 
     for (int c = 0; c < 2; ++c) {
-        int king_sq = g->king_sq[c];
-        int k_file  = file_of(king_sq);
-        int k_rank  = rank_of(king_sq);
+        uint64_t my_pawns = g->pieces[c][PIECE_PAWN];
+        int      king_sq  = g->king_sq[c];
+        int      k_file   = file_of(king_sq);
+        int      k_rank   = rank_of(king_sq);
 
         int dir   = (c == COLOR_WHITE) ?  1 : -1;
         int rank1 = k_rank + dir;
@@ -561,20 +565,12 @@ evaluate_king_shield(const struct game *g, const struct pawn_info *pi)
             int f = k_file + df;
             if (f < 0 || f > 7) continue;
 
-            if (rank1 >= 1 && rank1 <= 6) {
-                uint8_t p = g->board[make_sq(rank1, f)];
-                if (!is_empty(p)
-                    && piece_type(p) == PIECE_PAWN
-                    && piece_color(p) == (enum color)c)
-                    side_mg += KING_SHIELD_RANK1;
-            }
-            if (rank2 >= 1 && rank2 <= 6) {
-                uint8_t p = g->board[make_sq(rank2, f)];
-                if (!is_empty(p)
-                    && piece_type(p) == PIECE_PAWN
-                    && piece_color(p) == (enum color)c)
-                    side_mg += KING_SHIELD_RANK2;
-            }
+            if (rank1 >= 1 && rank1 <= 6
+                && (my_pawns & bit_of(make_sq(rank1, f))))
+                side_mg += KING_SHIELD_RANK1;
+            if (rank2 >= 1 && rank2 <= 6
+                && (my_pawns & bit_of(make_sq(rank2, f))))
+                side_mg += KING_SHIELD_RANK2;
         }
 
         if (c == COLOR_WHITE) mg += side_mg;
@@ -649,137 +645,60 @@ mover_in_check(const struct game *g)
     return king_in_check(g, moved);
 }
 
-/* (rank_delta, file_delta) pairs for leapers and slider rays.  */
-static const int knight_deltas[8][2] = {
-    {+2,+1},{+2,-1},{-2,+1},{-2,-1},{+1,+2},{+1,-2},{-1,+2},{-1,-2}
-};
-static const int king_deltas[8][2] = {
-    {+1,-1},{+1,0},{+1,+1},{0,-1},{0,+1},{-1,-1},{-1,0},{-1,+1}
-};
-static const int bishop_dirs[4][2] = { {+1,+1},{+1,-1},{-1,+1},{-1,-1} };
-static const int rook_dirs  [4][2] = { {+1, 0},{-1, 0},{ 0,+1},{ 0,-1} };
-
-/* Walks each ray in `dirs`; if the first occupied square holds `target`,
-   sets *from_out and returns 1.  */
-static int
-see_scan_slider(const uint8_t board[64], int to,
-                const int dirs[][2], int n_dirs,
-                uint8_t target, int *from_out)
+/* Bitboard of every piece of either color attacking `to` under occupancy
+   `occ`. Slider rays honor `occ`, so clearing a square from `occ` between
+   calls reveals any x-ray attacker that stood behind it.  */
+static uint64_t
+attackers_to(const struct game *g, int to, uint64_t occ)
 {
-    int tr = rank_of(to);
-    int tf = file_of(to);
+    const uint64_t knights = g->pieces[COLOR_WHITE][PIECE_KNIGHT]
+                           | g->pieces[COLOR_BLACK][PIECE_KNIGHT];
+    const uint64_t kings   = g->pieces[COLOR_WHITE][PIECE_KING]
+                           | g->pieces[COLOR_BLACK][PIECE_KING];
+    const uint64_t diag    = g->pieces[COLOR_WHITE][PIECE_BISHOP]
+                           | g->pieces[COLOR_BLACK][PIECE_BISHOP]
+                           | g->pieces[COLOR_WHITE][PIECE_QUEEN]
+                           | g->pieces[COLOR_BLACK][PIECE_QUEEN];
+    const uint64_t ortho   = g->pieces[COLOR_WHITE][PIECE_ROOK]
+                           | g->pieces[COLOR_BLACK][PIECE_ROOK]
+                           | g->pieces[COLOR_WHITE][PIECE_QUEEN]
+                           | g->pieces[COLOR_BLACK][PIECE_QUEEN];
 
-    for (int d = 0; d < n_dirs; ++d) {
-        int r = tr, f = tf;
-        while (1) {
-            r += dirs[d][0];
-            f += dirs[d][1];
-            if (r < 0 || r > 7 || f < 0 || f > 7) break;
-            int sq = make_sq(r, f);
-            uint8_t b = board[sq];
-            if (!is_empty(b)) {
-                if (b == target) { *from_out = sq; return 1; }
-                break;
-            }
-        }
-    }
-    return 0;
+    /* A pawn of color c attacks `to` from the squares a pawn of the
+       opposite color on `to` would attack, so the polarity is flipped.  */
+    uint64_t attackers = 0;
+    attackers |= pawn_attacks(to, COLOR_BLACK) & g->pieces[COLOR_WHITE][PIECE_PAWN];
+    attackers |= pawn_attacks(to, COLOR_WHITE) & g->pieces[COLOR_BLACK][PIECE_PAWN];
+    attackers |= knight_attacks(to)       & knights;
+    attackers |= king_attacks(to)         & kings;
+    attackers |= bishop_attacks(to, occ)  & diag;
+    attackers |= rook_attacks(to, occ)    & ortho;
+
+    return attackers;
 }
 
-/* Returns the least-valuable piece of `side` attacking `to` and sets
-   `*from_out` to its square; PIECE_NONE if none. Queens are scanned after
-   their matching slider class to preserve LVA ordering.  */
+/* Cheapest attacker in `side_attackers` (already masked to one side's
+   pieces): writes its single bit to `*bit_out`, or returns PIECE_NONE and
+   leaves `*bit_out` untouched. The scan order is by value, so knight
+   precedes bishop and must not be reordered to match the piece_type enum.  */
 static enum piece_type
-see_find_lva(const uint8_t board[64], int to, enum color side, int *from_out)
+see_least_valuable(const struct game *g, enum color side,
+                   uint64_t side_attackers, uint64_t *bit_out)
 {
-    int tr = rank_of(to);
-    int tf = file_of(to);
+    static const enum piece_type order[6] = {
+        PIECE_PAWN, PIECE_KNIGHT, PIECE_BISHOP,
+        PIECE_ROOK, PIECE_QUEEN,  PIECE_KING,
+    };
 
-    const int     pawn_dr   = (side == COLOR_WHITE) ? -1 : 1;
-    const uint8_t pawn_byte = encode_piece(side, PIECE_PAWN);
-    {
-        int r = tr + pawn_dr;
-        if (r >= 0 && r <= 7) {
-            for (int df = -1; df <= 1; df += 2) {
-                int f = tf + df;
-                if (f < 0 || f > 7) continue;
-                int sq = make_sq(r, f);
-                if (board[sq] == pawn_byte) { *from_out = sq; return PIECE_PAWN; }
-            }
+    for (int i = 0; i < 6; ++i) {
+        uint64_t set = side_attackers & g->pieces[side][order[i]];
+        if (set) {
+            *bit_out = bit_of(lsb(set));
+            return order[i];
         }
-    }
-
-    const uint8_t knight_byte = encode_piece(side, PIECE_KNIGHT);
-    for (int i = 0; i < 8; ++i) {
-        int r = tr + knight_deltas[i][0];
-        int f = tf + knight_deltas[i][1];
-        if (r < 0 || r > 7 || f < 0 || f > 7) continue;
-        int sq = make_sq(r, f);
-        if (board[sq] == knight_byte) { *from_out = sq; return PIECE_KNIGHT; }
-    }
-
-    const uint8_t bishop_byte = encode_piece(side, PIECE_BISHOP);
-    const uint8_t rook_byte   = encode_piece(side, PIECE_ROOK);
-    const uint8_t queen_byte  = encode_piece(side, PIECE_QUEEN);
-
-    if (see_scan_slider(board, to, bishop_dirs, 4, bishop_byte, from_out)) return PIECE_BISHOP;
-    if (see_scan_slider(board, to, rook_dirs,   4, rook_byte,   from_out)) return PIECE_ROOK;
-    if (see_scan_slider(board, to, bishop_dirs, 4, queen_byte,  from_out)) return PIECE_QUEEN;
-    if (see_scan_slider(board, to, rook_dirs,   4, queen_byte,  from_out)) return PIECE_QUEEN;
-
-    const uint8_t king_byte = encode_piece(side, PIECE_KING);
-    for (int i = 0; i < 8; ++i) {
-        int r = tr + king_deltas[i][0];
-        int f = tf + king_deltas[i][1];
-        if (r < 0 || r > 7 || f < 0 || f > 7) continue;
-        int sq = make_sq(r, f);
-        if (board[sq] == king_byte) { *from_out = sq; return PIECE_KING; }
     }
 
     return PIECE_NONE;
-}
-
-/* Iteratively applies the least-valuable attacker on `to`, alternating
-   sides. Returns the final swap-off depth d; gain[1..d] is filled.
-   The king is allowed to recapture only when no enemy defender
-   remains, since recapturing into check is illegal.  */
-static int
-see_swap_off(uint8_t board[64], int to, enum color side,
-             enum piece_type attacker_type, int *gain)
-{
-    int d = 0;
-
-    while (1) {
-        int             lva_from;
-        enum piece_type lva_type = see_find_lva(board, to, side, &lva_from);
-
-        if (lva_type == PIECE_NONE)
-            break;
-
-        if (lva_type == PIECE_KING) {
-            uint8_t saved = board[lva_from];
-            board[lva_from] = EMPTY;
-
-            int             dummy_from;
-            enum piece_type def = see_find_lva(board, to,
-                                               (side == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE,
-                                               &dummy_from);
-            if (def != PIECE_NONE) {
-                board[lva_from] = saved;
-                break;
-            }
-        }
-
-        d++;
-        gain[d] = piece_value[attacker_type] - gain[d - 1];
-
-        board[to]       = board[lva_from];
-        board[lva_from] = EMPTY;
-        attacker_type   = lva_type;
-        side            = (side == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
-    }
-
-    return d;
 }
 
 /* Reverse-pass minimax: each side picks the better of "stop now" and
@@ -798,43 +717,70 @@ see_unfold_gain(int *gain, int d)
 }
 
 int
-see(const uint8_t live_board[64], const struct move *m)
+see(const struct game *g, const struct move *m)
 {
+    const int        to    = m->to;
+    const int        from  = m->from;
+    enum color       mover;
+    enum color       side;
+    enum piece_type  on_to;
+    uint64_t         occ;
+    int              gain[32];
+    int              d;
+
     if (!(m->flags & MOVE_CAPTURE))
         return 0;
 
-    uint8_t board[64];
-    memcpy(board, live_board, sizeof(board));
+    mover = piece_color(g->board[from]);
+    on_to = piece_type(g->board[from]);
 
-    const int        to    = m->to;
-    const int        from  = m->from;
-    const enum color mover = piece_color(board[from]);
+    gain[0] = (m->flags & MOVE_ENP)
+        ? piece_value[PIECE_PAWN]
+        : piece_value[piece_type(g->board[to])];
 
-    int gain[32];
-
-    enum piece_type victim_type = (m->flags & MOVE_ENP)
-        ? PIECE_PAWN
-        : piece_type(board[to]);
-    gain[0] = piece_value[victim_type];
-
-    enum piece_type attacker_type = piece_type(board[from]);
+    /* The mover vacates `from`; `to` stays occupied throughout the swap-off
+       as successive capturers replace each other on it.  */
+    occ = g->occ_all ^ bit_of(from);
+    if (m->flags & MOVE_ENP)
+        occ ^= bit_of(to + (mover == COLOR_WHITE ? -8 : 8));
 
     if (m->flags & MOVE_PROMO) {
-        gain[0]      += piece_value[m->promo] - piece_value[PIECE_PAWN];
-        attacker_type = m->promo;
-        board[from]   = encode_piece(mover, m->promo);
+        gain[0] += piece_value[m->promo] - piece_value[PIECE_PAWN];
+        on_to    = m->promo;
     }
 
-    board[to]   = board[from];
-    board[from] = EMPTY;
+    side = (mover == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
+    d    = 0;
 
-    if (m->flags & MOVE_ENP) {
-        int cap_sq = to + (mover == COLOR_WHITE ? -8 : 8);
-        board[cap_sq] = EMPTY;
+    while (1) {
+        uint64_t        attackers = attackers_to(g, to, occ) & occ;
+        uint64_t        side_attackers = attackers & g->occ[side];
+        uint64_t        lva_bit = 0;
+        enum piece_type lva;
+
+        if (side_attackers == 0)
+            break;
+
+        lva = see_least_valuable(g, side, side_attackers, &lva_bit);
+
+        /* A king may recapture only when it lands on an undefended square;
+           recapturing into check is illegal. Removing the king from `occ`
+           may itself reveal an x-ray defender, so test against that.  */
+        if (lva == PIECE_KING) {
+            const enum color enemy = (side == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
+            uint64_t         occ_after = occ ^ lva_bit;
+
+            if (attackers_to(g, to, occ_after) & occ_after & g->occ[enemy])
+                break;
+        }
+
+        d++;
+        gain[d] = piece_value[on_to] - gain[d - 1];
+
+        occ  ^= lva_bit;
+        on_to = lva;
+        side  = (side == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
     }
-
-    enum color defender = (mover == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
-    int d = see_swap_off(board, to, defender, attacker_type, gain);
 
     return see_unfold_gain(gain, d);
 }
@@ -847,8 +793,9 @@ see(const uint8_t live_board[64], const struct move *m)
              0..HISTORY_MAX  quiet history
       -100 000+ losing captures (SEE < 0), pushed below quiets.  */
 static int
-score_move(const struct move *m, const uint8_t board[64], uint16_t tt_move, int ply)
+score_move(const struct move *m, const struct game *g, uint16_t tt_move, int ply)
 {
+    const uint8_t *board = g->board;
     uint16_t packed = move_pack(m);
 
     if (packed == tt_move)
@@ -868,7 +815,7 @@ score_move(const struct move *m, const uint8_t board[64], uint16_t tt_move, int 
         if (victim >= attacker)
             return 100000 + s;
 
-        int see_score = see(board, m);
+        int see_score = see(g, m);
         if (see_score >= 0)
             return 100000 + s;
         return -100000 + see_score;
@@ -887,11 +834,11 @@ score_move(const struct move *m, const uint8_t board[64], uint16_t tt_move, int 
 }
 
 static void
-score_moves(const struct move_list *ml, const uint8_t board[64],
+score_moves(const struct move_list *ml, const struct game *g,
             uint16_t tt_move, int ply, int *scores)
 {
     for (size_t i = 0; i < ml->count; ++i)
-        scores[i] = score_move(&ml->moves[i], board, tt_move, ply);
+        scores[i] = score_move(&ml->moves[i], g, tt_move, ply);
 }
 
 /* Pulls the highest-scoring remaining entry to position `start`.  */
@@ -981,7 +928,7 @@ qsearch(struct game *g, int alpha, int beta, int ply)
     /* Pass tt_move = 0; otherwise score_move would boost a quiet TT move
        to 1M and shadow real captures under the noise break below.  */
     int scores[MAX_MOVES];
-    score_moves(&ml, g->board, 0, ply, scores);
+    score_moves(&ml, g, 0, ply, scores);
 
     int legal = 0;
 
@@ -1119,7 +1066,7 @@ negamax(struct game *g, int depth, int ply, int alpha, int beta, int can_null)
     append_pseudolegal_moves(g, &ml);
 
     int scores[MAX_MOVES];
-    score_moves(&ml, g->board, tt_move, ply, scores);
+    score_moves(&ml, g, tt_move, ply, scores);
 
     int      best      = -SEARCH_INF;
     uint16_t best_move = 0;
@@ -1332,7 +1279,7 @@ search_run(struct game *g, const struct search_limits *lim,
         }
 
         int scores[MAX_MOVES];
-        score_moves(&ml, g->board, tt_move, 0, scores);
+        score_moves(&ml, g, tt_move, 0, scores);
 
         int alpha, beta;
         int delta = ASPIRATION_INIT_DELTA;

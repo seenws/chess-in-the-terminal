@@ -82,8 +82,9 @@ void tt_clear      (void);
 void tt_new_search (void);
 
 /* SEE: signed centipawn outcome of the capture sequence on `m->to`,
-   from the mover's perspective. Returns 0 for non-captures.  */
-int see(const uint8_t board[64], const struct move *m);
+   from the mover's perspective. Returns 0 for non-captures. Reads the
+   position's bitboards, so `g` must satisfy the board/bitboard invariant.  */
+int see(const struct game *g, const struct move *m);
 
 /* Returns 1 when the stored entry is sufficient to cut off at this
    alpha/beta window, in which case `*score_out` is written. Returns 0

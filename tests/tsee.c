@@ -175,7 +175,7 @@ main(void)
             continue;
         }
 
-        int got = see(g.board, &m);
+        int got = see(&g, &m);
         const char *tag = (got == c->expect) ? "PASS" : "FAIL";
         if (got == c->expect) pass++; else fail++;
 
