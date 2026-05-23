@@ -59,6 +59,7 @@ This produces the binary at `build/bin/citt`. Every build target — release, de
 ## Playing
 ```bash
 usage: ./build/bin/citt [-w] [-b] [-s] [-n PLIES]
+  -v, --version       print version information
   -w, --ai-white      engine plays white
   -b, --ai-black      engine plays black
   -s, --selfplay      engine plays both sides (alias for -w -b)

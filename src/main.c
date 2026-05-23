@@ -26,7 +26,7 @@ print_version_info(void)
 {
     puts("Chess in the Terminal (CITT) - A shell-interactive chess engine written in C99.");
     puts("Copyright (C) 2026 Sinan Olsson-Pasic");
-    puts("Version: 1.1"); /* Officially 1.1 once bitboard implementation is finished */
+    puts("Version: 1.1");
     puts("License: MIT License");
     puts("This is free software: you are free to change and redistribute it.");
 }
