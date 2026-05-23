@@ -15,22 +15,25 @@
 #include "search.h"
 #include "zobrist.h"
 
-/* ---- search state and counters ------------------------------------- */
-
+/* Total nodes visited by negamax + qsearch during the current search.  */
 static unsigned long long s_nodes;
+/* Count of TT probes that returned a usable score.  */
 static unsigned long long s_tt_hits;
+/* Count of TT entries written during the current search.  */
 static unsigned long long s_tt_stores;
+/* Count of beta cutoffs across negamax + qsearch.  */
 static unsigned long long s_cutoffs;
 
-/* Abort plumbing. `s_stop_external` is set from outside (UCI 'stop' or a
-   signal handler); the search polls it every ABORT_POLL_NODES nodes,
-   together with the deadline and node-limit checks. Once `s_aborted` is
-   set, every recursive frame short-circuits — the returned score is
-   garbage and must be discarded by the caller.  */
+/* Polling rate (in nodes) for the abort/deadline check.  */
 #define ABORT_POLL_NODES 4096
+
+/* Set asynchronously by UCI "stop" or a signal; polled inside the search.  */
 static volatile sig_atomic_t s_stop_external;
+/* Absolute time (ms) at which the current search must exit.  */
 static uint64_t              s_deadline_ms;
+/* Node ceiling for the current search; UINT64_MAX means no limit.  */
 static uint64_t              s_node_limit;
+/* Nonzero once an abort condition has tripped; every frame then exits.  */
 static int                   s_aborted;
 
 static uint64_t
@@ -57,12 +60,16 @@ search_signal_stop(void)
     s_stop_external = 1;
 }
 
-/* History accumulates across searches; killers are wiped per search.  */
 #define HISTORY_MAX 16384
+
+/* Two killer moves per ply, wiped at the start of every search.  */
 static uint16_t s_killers[SEARCH_MAX_DEPTH * 2][2];
+/* Quiet-move history score indexed by [color][piece_type][to-square];
+   persists across searches and ages slowly via the cutoff bonus.  */
 static int      s_history[2][7][128];
 
 #define PAWN_HASH_SIZE 4096
+/* Cache of pawn-structure evaluations indexed by the pawn-only Zobrist.  */
 static struct pawn_hash_entry s_pawn_hash[PAWN_HASH_SIZE];
 
 #ifdef DEBUG
@@ -71,11 +78,13 @@ static struct pawn_hash_entry s_pawn_hash[PAWN_HASH_SIZE];
   #define INC(x) ((void)0)
 #endif
 
-/* ---- transposition table ------------------------------------------- */
-
+/* Base of the transposition table; NULL when uninitialised.  */
 static struct tt_entry *tt       = NULL;
-static size_t           tt_count = 0;   /* always a power of two */
+/* Number of TT slots; always a power of two so tt_mask is valid.  */
+static size_t           tt_count = 0;
+/* Slot index mask (tt_count - 1).  */
 static size_t           tt_mask  = 0;
+/* Monotonically incrementing search counter used by replacement.  */
 static uint8_t          tt_age   = 0;
 
 static size_t
@@ -97,7 +106,6 @@ tt_init(size_t mb)
     if (n < 1024) n = 1024;
 
     tt = calloc(n, sizeof(struct tt_entry));
-
     if (!tt) {
         tt_count = 0;
         tt_mask  = 0;
@@ -180,7 +188,8 @@ tt_probe(uint64_t key, int depth, int alpha, int beta, int *score_out, uint16_t 
     return 0;
 }
 
-/* Replacement: same position, older generation, or at least as deep.  */
+/* Replaces when the slot matches the key, holds a stale generation,
+   or stores at greater-or-equal depth.  */
 void
 tt_store(uint64_t key, int depth, int score, enum tt_bound bound, uint16_t move)
 {
@@ -199,13 +208,12 @@ tt_store(uint64_t key, int depth, int score, enum tt_bound bound, uint16_t move)
     }
 }
 
-/* ---- move packing for TT entries ----------------------------------- */
-
-/* Promo packing fits in 2 bits via parallel tables. Index 0 means
-   "no promo" both ways; bishops/non-promos collapse to 0.  */
+/* 2-bit encoding of the promotion piece; PIECE_BISHOP and any non-promo
+   collapse to 0 (we never store the rare bishop promotion in the TT).  */
 static const uint8_t         promo_pack_table[7]   = {
     [PIECE_QUEEN] = 1, [PIECE_ROOK] = 2, [PIECE_KNIGHT] = 3
 };
+/* Inverse table for promo_pack_table.  */
 static const enum piece_type promo_unpack_table[4] = {
     PIECE_NONE, PIECE_QUEEN, PIECE_ROOK, PIECE_KNIGHT
 };
@@ -244,6 +252,7 @@ move_unpack(uint16_t v)
 void
 move_to_uci(const struct move *m, char buf[6])
 {
+    /* Lower-case promotion suffix indexed by piece_type; index 0 unused.  */
     static const char promo_chars[] = " pbnrqk";
 
     buf[0] = (char)('a' + square_file(m->from));
@@ -258,8 +267,6 @@ move_to_uci(const struct move *m, char buf[6])
         buf[4] = '\0';
     }
 }
-
-/* ---- piece values, phase, piece-square tables ---------------------- */
 
 const int piece_value[7] = {
     0,      /* PIECE_NONE */
@@ -276,10 +283,8 @@ const int phase_weight[7] = {
     0, 0, 1, 1, 2, 4, 0,
 };
 
-/* Michniewski "Simplified Evaluation" PSTs. Rank 8 is row 0; pst_lookup()
-   mirrors for black. PIECE_NONE row is zero so a stray lookup against an
-   empty square contributes nothing. Only PAWN and KING differ between mg
-   and eg; minor/major piece tables are shared via the macros below.  */
+/* Michniewski "Simplified Evaluation" PSTs; only PAWN and KING differ
+   between middlegame and endgame, so minor/major tables are shared.  */
 
 #define PST_KNIGHT_DATA {                              \
     -50, -40, -30, -30, -30, -30, -40, -50,            \
@@ -342,7 +347,6 @@ const int16_t pst_mg[7][64] = {
     [PIECE_BISHOP] = PST_BISHOP_DATA,
     [PIECE_ROOK]   = PST_ROOK_DATA,
     [PIECE_QUEEN]  = PST_QUEEN_DATA,
-    /* MG king: corner-favoring (sheltered behind the pawn line).  */
     [PIECE_KING] = {
         -30, -40, -40, -50, -50, -40, -40, -30,
         -30, -40, -40, -50, -50, -40, -40, -30,
@@ -372,7 +376,6 @@ const int16_t pst_eg[7][64] = {
     [PIECE_BISHOP] = PST_BISHOP_DATA,
     [PIECE_ROOK]   = PST_ROOK_DATA,
     [PIECE_QUEEN]  = PST_QUEEN_DATA,
-    /* EG king: center-favoring; king should be active in the endgame.  */
     [PIECE_KING] = {
         -50, -40, -30, -20, -20, -30, -40, -50,
         -30, -20, -10,   0,   0, -10, -20, -30,
@@ -385,8 +388,6 @@ const int16_t pst_eg[7][64] = {
     },
 };
 
-/* ---- evaluation term constants ------------------------------------- */
-
 #define BISHOP_PAIR_BONUS          30
 #define DOUBLED_PAWN_PENALTY       15
 #define ISOLATED_PAWN_PENALTY      15
@@ -395,15 +396,12 @@ const int16_t pst_eg[7][64] = {
 #define KING_SHIELD_RANK1          15
 #define KING_SHIELD_RANK2          10
 
-/* Passed-pawn bonus by ranks-advanced-from-start (0..5; 5 = one move from
-   promotion). EG ~2x MG: with little material left, a passer is decisive.  */
+/* Middlegame passed-pawn bonus indexed by ranks advanced from the start
+   square (0..5; 5 = one push from promoting).  */
 static const int passed_pawn_mg[6] = { 0,  5, 15, 25, 40,  70 };
+/* Endgame passed-pawn bonus; ~2x middlegame because passers decide endgames.  */
 static const int passed_pawn_eg[6] = { 0, 10, 20, 40, 70, 120 };
 
-/* ---- evaluation -------------------------------------------------- */
-
-/* Pawns can only live on ranks 1..6 (ranks 0/7 would have promoted),
-   so iterate just that band.  */
 static void
 collect_pawn_info(const struct game *g, struct pawn_info *pi)
 {
@@ -455,8 +453,6 @@ evaluate_pawn_structure(const struct game *g, const struct pawn_info *pi)
         }
     }
 
-    /* Passed: per-pawn pass using the rank tables. White at (F, R) is
-       passed iff no black pawn on files F-1/F/F+1 lies at rank > R.  */
     for (int rank = 1; rank < 7; ++rank) {
         for (int file = 0; file < 8; ++file) {
             uint8_t p = g->board[(rank << 4) | file];
@@ -521,7 +517,7 @@ evaluate_rook_files(const struct game *g, const struct pawn_info *pi)
     return pe;
 }
 
-/* MG-only: an active endgame king ignores its pawn shield.  */
+/* Middlegame-only; an active endgame king does not care about its shield.  */
 static struct pawn_eval
 evaluate_king_shield(const struct game *g, const struct pawn_info *pi)
 {
@@ -568,8 +564,8 @@ evaluate_king_shield(const struct game *g, const struct pawn_info *pi)
     return pe;
 }
 
-/* Cached by g->pawn_hash; structure changes only on pawn moves/captures
-   so most consecutive evaluate() calls hit.  */
+/* Looks up the pawn-structure eval in s_pawn_hash; on a miss, computes
+   it and stores the result.  */
 static struct pawn_eval
 pawn_eval_cached(const struct game *g, struct pawn_info *pi_out)
 {
@@ -607,7 +603,7 @@ evaluate(const struct game *g)
     mg += ps.mg + rf.mg + ks.mg;
     eg += ps.eg + rf.eg + ks.eg;
 
-    /* Clamp phase: mass-promotion positions can push it past PHASE_MAX.  */
+    /* Mass-promotion positions can push phase past PHASE_MAX; clamp.  */
     int phase = g->phase;
     if (phase > PHASE_MAX) phase = PHASE_MAX;
     if (phase < 0)         phase = 0;
@@ -630,14 +626,180 @@ mover_in_check(const struct game *g)
     return king_in_check(g, moved);
 }
 
-/* ---- move ordering ------------------------------------------------- */
+/* 0x88 offset tables duplicated here so see() does not depend on movegen
+   internals; keep these in sync with movegen.c.  */
+/* Eight knight steps.  */
+static const int8_t see_knight_offsets[8] = { -33, -31, -18, -14, 14, 18, 31, 33 };
+/* Eight king steps.  */
+static const int8_t see_king_offsets  [8] = { -17, -16, -15,  -1,  1, 15, 16, 17 };
+/* Four bishop diagonal rays.  */
+static const int8_t see_bishop_offsets[4] = { -17, -15, 15, 17 };
+/* Four rook orthogonal rays.  */
+static const int8_t see_rook_offsets  [4] = { -16,  -1,  1, 16 };
 
-/* Score ranges:
-     1000000  TT move
-      100000+ captures (MVV/LVA + capture-promotion bonus)
-       90000+ quiet promotions (Q/R/B/N)
-       88000+ killer 1 / killer 2
-       history (0..HISTORY_MAX) for the rest                                */
+/* Returns the least-valuable piece of `side` attacking `to` and sets
+   `*from_out` to its square; PIECE_NONE if none. Queens are scanned after
+   their matching slider class to preserve LVA ordering.  */
+static enum piece_type
+see_find_lva(const uint8_t board[128], int to, enum color side, int *from_out)
+{
+    const int     pawn_step = (side == COLOR_WHITE) ? -16 : 16;
+    const uint8_t pawn_byte = encode_piece(side, PIECE_PAWN);
+
+    int sq = to + pawn_step - 1;
+    if (on_board(sq) && board[sq] == pawn_byte) { *from_out = sq; return PIECE_PAWN; }
+    sq = to + pawn_step + 1;
+    if (on_board(sq) && board[sq] == pawn_byte) { *from_out = sq; return PIECE_PAWN; }
+
+    const uint8_t knight_byte = encode_piece(side, PIECE_KNIGHT);
+    for (int i = 0; i < 8; ++i) {
+        sq = to + see_knight_offsets[i];
+        if (on_board(sq) && board[sq] == knight_byte) { *from_out = sq; return PIECE_KNIGHT; }
+    }
+
+    const uint8_t bishop_byte = encode_piece(side, PIECE_BISHOP);
+    const uint8_t queen_byte  = encode_piece(side, PIECE_QUEEN);
+
+    for (int i = 0; i < 4; ++i) {
+        sq = to + see_bishop_offsets[i];
+        while (on_board(sq)) {
+            uint8_t b = board[sq];
+            if (!is_empty(b)) {
+                if (b == bishop_byte) { *from_out = sq; return PIECE_BISHOP; }
+                break;
+            }
+            sq += see_bishop_offsets[i];
+        }
+    }
+
+    const uint8_t rook_byte = encode_piece(side, PIECE_ROOK);
+    for (int i = 0; i < 4; ++i) {
+        sq = to + see_rook_offsets[i];
+        while (on_board(sq)) {
+            uint8_t b = board[sq];
+            if (!is_empty(b)) {
+                if (b == rook_byte) { *from_out = sq; return PIECE_ROOK; }
+                break;
+            }
+            sq += see_rook_offsets[i];
+        }
+    }
+
+    for (int i = 0; i < 4; ++i) {
+        sq = to + see_bishop_offsets[i];
+        while (on_board(sq)) {
+            uint8_t b = board[sq];
+            if (!is_empty(b)) {
+                if (b == queen_byte) { *from_out = sq; return PIECE_QUEEN; }
+                break;
+            }
+            sq += see_bishop_offsets[i];
+        }
+    }
+    for (int i = 0; i < 4; ++i) {
+        sq = to + see_rook_offsets[i];
+        while (on_board(sq)) {
+            uint8_t b = board[sq];
+            if (!is_empty(b)) {
+                if (b == queen_byte) { *from_out = sq; return PIECE_QUEEN; }
+                break;
+            }
+            sq += see_rook_offsets[i];
+        }
+    }
+
+    const uint8_t king_byte = encode_piece(side, PIECE_KING);
+    for (int i = 0; i < 8; ++i) {
+        sq = to + see_king_offsets[i];
+        if (on_board(sq) && board[sq] == king_byte) { *from_out = sq; return PIECE_KING; }
+    }
+
+    return PIECE_NONE;
+}
+
+int
+see(const uint8_t live_board[128], const struct move *m)
+{
+    if (!(m->flags & MOVE_CAPTURE)) return 0;
+
+    uint8_t board[128];
+    memcpy(board, live_board, sizeof(board));
+
+    const int        to    = m->to;
+    const int        from  = m->from;
+    const enum color mover = piece_color(board[from]);
+
+    int gain[32];
+    int d = 0;
+
+    enum piece_type victim_type = (m->flags & MOVE_ENP)
+        ? PIECE_PAWN
+        : piece_type(board[to]);
+    gain[0] = piece_value[victim_type];
+
+    enum piece_type attacker_type = piece_type(board[from]);
+
+    if (m->flags & MOVE_PROMO) {
+        gain[0]      += piece_value[m->promo] - piece_value[PIECE_PAWN];
+        attacker_type = m->promo;
+        board[from]   = encode_piece(mover, m->promo);
+    }
+
+    board[to]   = board[from];
+    board[from] = EMPTY;
+
+    if (m->flags & MOVE_ENP) {
+        int cap_sq = to + (mover == COLOR_WHITE ? -16 : 16);
+        board[cap_sq] = EMPTY;
+    }
+
+    enum color side = (mover == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
+
+    while (1) {
+        int             lva_from;
+        enum piece_type lva_type = see_find_lva(board, to, side, &lva_from);
+        if (lva_type == PIECE_NONE) break;
+
+        if (lva_type == PIECE_KING) {
+            uint8_t saved = board[lva_from];
+            board[lva_from] = EMPTY;
+
+            int             dummy_from;
+            enum piece_type def = see_find_lva(board, to,
+                                               (side == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE,
+                                               &dummy_from);
+            if (def != PIECE_NONE) {
+                board[lva_from] = saved;
+                break;
+            }
+        }
+
+        d++;
+        gain[d] = piece_value[attacker_type] - gain[d-1];
+
+        board[to]       = board[lva_from];
+        board[lva_from] = EMPTY;
+        attacker_type   = lva_type;
+        side            = (side == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
+    }
+
+    while (d > 0) {
+        int a = -gain[d-1];
+        int b =  gain[d];
+        gain[d-1] = -(a > b ? a : b);
+        d--;
+    }
+
+    return gain[0];
+}
+
+/* Score ranges (highest first):
+     1 000 000  TT move
+       100 000+ good captures (SEE >= 0; MVV/LVA + promo bonus tie-break)
+        90 000+ quiet promotions (Q/R/B/N)
+        88 000+ killer 1 / killer 2
+             0..HISTORY_MAX  quiet history
+      -100 000+ losing captures (SEE < 0), pushed below quiets.  */
 static int
 score_move(const struct move *m, const uint8_t board[128], uint16_t tt_move, int ply)
 {
@@ -652,12 +814,18 @@ score_move(const struct move *m, const uint8_t board[128], uint16_t tt_move, int
             : piece_type(board[m->to]);
         int victim   = piece_value[victim_type];
         int attacker = piece_value[piece_type(board[m->from])];
-        int s        = 100000 + victim * 10 - attacker;
+        int s        = victim * 10 - attacker;
 
         if (m->flags & MOVE_PROMO)
             s += piece_value[m->promo] - piece_value[PIECE_PAWN];
 
-        return s;
+        if (victim >= attacker)
+            return 100000 + s;
+
+        int see_score = see(board, m);
+        if (see_score >= 0)
+            return 100000 + s;
+        return -100000 + see_score;
     }
 
     if (m->flags & MOVE_PROMO)
@@ -680,9 +848,7 @@ score_moves(const struct move_list *ml, const uint8_t board[128],
         scores[i] = score_move(&ml->moves[i], board, tt_move, ply);
 }
 
-/* Lazy selection: pulls the best remaining move/score pair to `start`.
-   Each iteration of the move loop calls this once, and cutting off the
-   loop early saves the rest of the comparisons.  */
+/* Pulls the highest-scoring remaining entry to position `start`.  */
 static void
 pick_next_move(struct move_list *ml, int *scores, size_t start)
 {
@@ -702,7 +868,8 @@ pick_next_move(struct move_list *ml, int *scores, size_t start)
     }
 }
 
-/* TT-stored mate scores must be ply-independent; convert at the boundary.  */
+/* Strips current ply from a mate score so the stored value is
+   position-relative rather than search-relative.  */
 static int
 score_to_tt(int s, int ply)
 {
@@ -719,14 +886,9 @@ score_from_tt(int s, int ply)
     return s;
 }
 
-/* ---- quiescence search --------------------------------------------- */
-
-/* Captures normally exhaust material and terminate, but perpetual-check
-   evasion lines can recurse without bound. Hard cap at 2*MAX_DEPTH.  */
-#define QSEARCH_PLY_LIMIT (SEARCH_MAX_DEPTH * 2)
-
-/* Delta-pruning slack above the captured piece's value (~2 pawns).  */
-#define QSEARCH_DELTA_MARGIN 200
+#define QSEARCH_PLY_LIMIT     (SEARCH_MAX_DEPTH * 2)
+/* Delta-pruning slack above the captured piece value (~2 pawns).  */
+#define QSEARCH_DELTA_MARGIN  200
 
 static int
 qsearch(struct game *g, int alpha, int beta, int ply)
@@ -751,7 +913,6 @@ qsearch(struct game *g, int alpha, int beta, int ply)
     uint16_t  best_move = 0;
 
     if (in_check) {
-        /* Forced to move: no stand-pat. Mate detected below at legal==0.  */
         best = -SEARCH_INF;
     } else {
         int stand_pat = evaluate(g);
@@ -771,8 +932,8 @@ qsearch(struct game *g, int alpha, int beta, int ply)
     struct move_list ml; ml.count = 0;
     append_pseudolegal_moves(g, &ml);
 
-    /* tt_move is *not* passed: score_move would boost it to 1M and a
-       quiet TT move would shadow real captures under the noise break.  */
+    /* Pass tt_move = 0; otherwise score_move would boost a quiet TT move
+       to 1M and shadow real captures under the noise break below.  */
     int scores[MAX_MOVES];
     score_moves(&ml, g->board, 0, ply, scores);
 
@@ -785,14 +946,11 @@ qsearch(struct game *g, int alpha, int beta, int ply)
         const int          noisy = (m->flags & (MOVE_CAPTURE | MOVE_PROMO)) != 0;
 
         if (!in_check) {
-            /* score_move yields >0 iff noisy; lazy sort puts noisy first,
-               so the first quiet means no more noisy follow.  */
+            /* Lazy sort places all noisy moves first; reaching a quiet
+               move means no more noisy follow.  */
             if (!noisy)
                 break;
 
-            /* Delta pruning: skip clean captures that can't lift best to
-               alpha. Promotions bypass (huge value swing); check evasions
-               bypass (forced).  */
             if ((m->flags & MOVE_CAPTURE) && !(m->flags & MOVE_PROMO)) {
                 enum piece_type victim_t = (m->flags & MOVE_ENP)
                     ? PIECE_PAWN
@@ -832,8 +990,6 @@ qsearch(struct game *g, int alpha, int beta, int ply)
         }
     }
 
-    /* legal==0 out of check just means we skipped all the quiets; only
-       in-check + no replies is mate.  */
     if (in_check && legal == 0) {
         int mate_score = -SEARCH_MATE + ply;
         tt_store(g->hash, 0, score_to_tt(mate_score, ply),
@@ -851,23 +1007,15 @@ qsearch(struct game *g, int alpha, int beta, int ply)
     return best;
 }
 
-/* ---- negamax + null-move + LMR ------------------------------------- */
-
-/* Null-move pruning: R=2 reduction, skip near mate scores, require some
-   non-pawn material to avoid worst-case zugzwang.  */
 #define NULL_MOVE_R          2
 #define NULL_MOVE_MIN_DEPTH  3
 #define NULL_MOVE_MIN_MAT    (8 * 100)
 
-/* LMR: first few legal moves at full depth; later quiets get R=1 (or R=2
-   when both legal and depth are sufficient).  */
 #define LMR_MIN_LEGAL    4
 #define LMR_MIN_DEPTH    3
 #define LMR_DEEP_LEGAL   8
 #define LMR_DEEP_DEPTH   5
 
-/* Aspiration window narrows the root search around the previous score;
-   widens on fail.  */
 #define ASPIRATION_MIN_DEPTH   5
 #define ASPIRATION_INIT_DELTA  50
 
@@ -914,10 +1062,9 @@ negamax(struct game *g, int depth, int ply, int alpha, int beta, int can_null)
         g->hash      = saved_hash;
 
         if (null_score >= beta) {
-            /* Clamp: reduced-depth searches can't be trusted to report
-               correct mate distance.  */
             if (null_score >= SEARCH_MATE - 1000)
                 return beta;
+
             return null_score;
         }
     }
@@ -962,12 +1109,9 @@ negamax(struct game *g, int depth, int ply, int alpha, int beta, int can_null)
                     reduction = 2;
             }
 
-            /* PVS scout: null window + (optionally) reduced depth.  */
             score = -negamax(g, depth - 1 - reduction, ply + 1,
                              -alpha - 1, -alpha, 1);
 
-            /* Re-search if the scout suggests improvement; skip if the
-               parent window is already null (re-search would be identical).  */
             if (score > alpha && beta - alpha > 1)
                 score = -negamax(g, depth - 1, ply + 1, -beta, -alpha, 1);
         }
@@ -985,8 +1129,8 @@ negamax(struct game *g, int depth, int ply, int alpha, int beta, int can_null)
             if (alpha >= beta) {
                 INC(s_cutoffs);
 
-                /* Killer + history only for quiet cutoffs; captures already
-                   sort high via MVV/LVA.  */
+                /* Update killers/history only for quiet cutoffs; noisy
+                   moves already sort high via MVV/LVA.  */
                 if (!(m->flags & (MOVE_CAPTURE | MOVE_PROMO))) {
                     uint16_t packed = move_pack(m);
 
@@ -1021,9 +1165,8 @@ negamax(struct game *g, int depth, int ply, int alpha, int beta, int can_null)
     return best;
 }
 
-/* Walk the TT from the current position, recording moves until we hit a
-   miss, a collision, or an illegal stored move. Restores `g` on the way
-   out via paired unmake.  */
+/* Walks the TT from `g`, recording moves until a miss, a collision, or
+   an illegal stored move; restores `g` before returning.  */
 static int
 extract_pv(struct game *g, struct move *out, int max_len)
 {
@@ -1039,8 +1182,8 @@ extract_pv(struct game *g, struct move *out, int max_len)
 
         struct move stored = move_unpack(e->move);
 
-        /* Recover full flags by matching against the legal move list, and
-           guard against TT-key collisions where stored.from/to is bogus.  */
+        /* Recover flags by matching against the legal-move list; this
+           also rejects collisions where stored.from/to is bogus.  */
         struct move_list ml; ml.count = 0;
         append_pseudolegal_moves(g, &ml);
 
@@ -1074,10 +1217,9 @@ extract_pv(struct game *g, struct move *out, int max_len)
     return n;
 }
 
-/* Convert UCI-style clock controls into an absolute deadline. movetime
-   beats clock-based budget; clock-based uses moves_to_go (defaults to 30)
-   and adds 75% of increment, hard-capped at 1/4 of remaining time so we
-   don't blow the clock on one move.  */
+/* Converts UCI clock controls into an absolute deadline. `movetime` wins
+   over clock-based budget; clock-based budget = our_time/moves_to_go
+   + 75% of increment, hard-capped at 1/4 of remaining time.  */
 static uint64_t
 compute_deadline(const struct search_limits *lim, enum color stm, uint64_t start_ms)
 {
@@ -1133,8 +1275,7 @@ search_run(struct game *g, const struct search_limits *lim,
     int         have_best_move = 0;
 
     for (int d = 1; d <= max_depth; ++d) {
-        /* Move list + scores computed once per depth iteration; aspiration
-           retries reuse them.  */
+        /* Move list and scores are reused across aspiration retries.  */
         struct move_list ml; ml.count = 0;
         append_pseudolegal_moves(g, &ml);
 
@@ -1167,7 +1308,7 @@ search_run(struct game *g, const struct search_limits *lim,
             local_best = (struct move){ 0 };
             legal      = 0;
 
-            /* Loop locally raises alpha; window's lower bound stays in
+            /* Local copy of alpha; the aspiration lower bound stays in
                `alpha` for fail-low detection.  */
             int loop_alpha = alpha;
 

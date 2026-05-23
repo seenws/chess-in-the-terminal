@@ -11,6 +11,7 @@
 #include "parser.h"
 #include "search.h"
 
+/* FEN positions exercised by the benchmark suite; each row is one trial.  */
 static const struct {
     const char *name;
     const char *fen;
@@ -47,7 +48,7 @@ print_usage(const char *prog)
             prog, prog);
 }
 
-/* Wipes the TT and per-search tables so each row is reproducible.  */
+/* Runs one row; wipes the TT and per-search tables for reproducibility.  */
 static void
 bench_one(const char *label, const struct game *seed, int depth,
           unsigned long long *total_nodes, double *total_time)

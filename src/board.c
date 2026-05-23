@@ -10,6 +10,7 @@
 void
 board_init(uint8_t board[128])
 {
+    /* Piece type on each file (a..h) of the starting back rank.  */
     static const enum piece_type back_rank[8] = {
         PIECE_ROOK, PIECE_KNIGHT, PIECE_BISHOP, PIECE_QUEEN,
         PIECE_KING, PIECE_BISHOP, PIECE_KNIGHT, PIECE_ROOK
@@ -28,6 +29,7 @@ board_init(uint8_t board[128])
 void
 board_print(const uint8_t board[128])
 {
+    /* ASCII glyph for each (color, piece_type); index 0 is unused.  */
     static const char symbols[2][7] = {
         {' ', 'P', 'B', 'N', 'R', 'Q', 'K'},
         {' ', 'p', 'b', 'n', 'r', 'q', 'k'}

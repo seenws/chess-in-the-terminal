@@ -6,7 +6,7 @@
 
 #include "board.h"
 
-/* 218 is the theoretical maximum legal-move count for any chess position.  */
+/* Theoretical maximum legal-move count for any chess position.  */
 #define MAX_MOVES 218
 
 enum move_flag {
@@ -52,12 +52,12 @@ struct game;
 
 void append_pseudolegal_moves (const struct game *g, struct move_list *list);
 
-/* Restores the position before returning, but takes a mutable pointer
-   because it uses make/unmake internally.  */
+/* Restores `g` before returning; takes a mutable pointer because it uses
+   make/unmake internally.  */
 void append_legal_moves       (struct game *g, struct move_list *list);
 
 int  square_attacked (const uint8_t board[128], int target_sq, enum color by_color);
 int  find_king       (const uint8_t board[128], enum color c);
 int  king_in_check   (const struct game *g, enum color side);
 
-#endif
+#endif /* CITT_HEADERS_MOVEGEN_H_ */

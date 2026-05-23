@@ -16,6 +16,6 @@
 #else
   #define DBG_PRINTF(...) ((void)0)
   #define DBG_ASSERT(x)   ((void)0)
-#endif
+#endif /* DEBUG */
 
-#endif // CITT_HEADERS_DEBUG_H_
+#endif /* CITT_HEADERS_DEBUG_H_ */

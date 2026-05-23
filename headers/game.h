@@ -7,8 +7,7 @@
 
 struct move;
 
-/* No-en-passant sentinel. 0xFF fails on_board() so movegen needs no
-   special case.  */
+/* No-en-passant sentinel; fails on_board() so movegen needs no special case.  */
 #define EP_NONE 0xFF
 
 enum castle_rights {
@@ -20,8 +19,8 @@ enum castle_rights {
 };
 
 /* Incremental accumulators (material, psqt, phase, bishops, king_sq,
-   pawn_hash) are maintained by make_move/unmake_move; callers that mutate
-   board[] directly must call compute_eval_state to resync.  */
+   pawn_hash) are maintained by make_move/unmake_move; a caller that
+   mutates board[] directly must call compute_eval_state to resync.  */
 struct game {
     uint8_t    board[128];
     enum color turn;
@@ -39,23 +38,20 @@ struct game {
     uint64_t   pawn_hash;
 };
 
-/* Session-level CLI/UI configuration. Lives outside `struct game` because
-   it never changes during play and has no place in a position snapshot.  */
+/* Session-level CLI/UI configuration; held outside `struct game` so a
+   position snapshot stays self-contained.  */
 struct ui_config {
     uint8_t ai_white;
     uint8_t ai_black;
 };
 
-/* Row of the castle_rights_clears table in game.c: a square whose change
-   of occupancy clears the given castling-rights mask.  */
 struct castle_rights_clear {
     uint8_t sq;
     uint8_t mask;
 };
 
-/* Pre-move snapshot for unmake_move. Sized small so per-node copies in
-   search stay cheap.  `captured` is board[m->to] before the move (EMPTY
-   for non-captures and en passant).  */
+/* Pre-move snapshot for unmake_move. `captured` is board[m->to] before
+   the move (EMPTY for non-captures and en passant).  */
 struct undo_state {
     uint64_t hash;
     int16_t  material[2];
@@ -78,4 +74,4 @@ void unmake_move (struct game *g, const struct move *m, const struct undo_state 
 
 void compute_eval_state(struct game *g);
 
-#endif
+#endif /* CITT_HEADERS_GAME_H_ */

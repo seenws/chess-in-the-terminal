@@ -6,17 +6,17 @@
 #include "game.h"
 #include "movegen.h"
 
-/* 0x88 direction offsets: +16 is one rank up, +1 is one file right.
-   Queen movement reuses king_offsets (same 8 directions).  */
+/* 0x88 direction offsets: +16 is one rank up, +1 is one file right.  */
+/* Eight L-shaped knight steps.  */
 static const int8_t knight_offsets[8] = { -33, -31, -18, -14, 14, 18, 31, 33 };
+/* Eight one-square king steps; queens reuse this table.  */
 static const int8_t king_offsets[8]   = { -17, -16, -15,  -1,  1, 15, 16, 17 };
+/* Four diagonal slider rays for bishops.  */
 static const int8_t bishop_offsets[4] = { -17, -15, 15, 17 };
+/* Four orthogonal slider rays for rooks.  */
 static const int8_t rook_offsets[4]   = { -16,  -1,  1, 16 };
 #define queen_offsets king_offsets
 
-/* Walks each direction in `offsets`; returns 1 if the first piece found
-   along any ray is `slider` or `queen`. A blocker that is neither only
-   blocks that ray, so iteration continues with the next direction.  */
 static inline int
 slider_attacks(const uint8_t board[128], int target_sq,
                const int8_t *offsets, int n,
@@ -132,8 +132,7 @@ append_slider_moves(const uint8_t board[128], const uint8_t from,
     }
 }
 
-/* Emits a single quiet/capture push, or four promotion entries (Q/R/B/N)
-   when `to` lands on the promotion rank.  */
+/* Emits one push, or four promotion entries when `to` is on the promo rank.  */
 static void
 append_pawn_push_or_promote(struct move_list *list, uint8_t from, uint8_t to,
                             enum move_flag flags, int promo_rank)
@@ -143,6 +142,7 @@ append_pawn_push_or_promote(struct move_list *list, uint8_t from, uint8_t to,
         return;
     }
 
+    /* Promotion choices, ordered most-likely-best first.  */
     static const enum piece_type promos[4] = {
         PIECE_QUEEN, PIECE_ROOK, PIECE_BISHOP, PIECE_KNIGHT
     };
@@ -197,10 +197,9 @@ append_pawn_moves(const uint8_t board[128], const uint8_t from,
     }
 }
 
-/* Castling: must not be in check, and the king-transit squares (f/g for
-   kingside, d/c for queenside) must be empty AND not attacked. The b-file
-   square on the queenside must be empty (the rook crosses it) but is not
-   a king-transit square, so no attack check there.  */
+/* Generates castling moves when rights are intact, the king is not in
+   check, and every king-transit square is empty and unattacked. The
+   queenside b-file square must be empty but is not a transit square.  */
 static void
 append_castle_moves(const struct game *g, struct move_list *list)
 {

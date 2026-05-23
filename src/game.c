@@ -11,9 +11,8 @@
 #include "search.h"
 #include "zobrist.h"
 
-/* Walks the board to (re)build every incremental field on `g`. Called from
-   game_init and parse_fen; any caller mutating board[] directly must call
-   this before searching or evaluating.  */
+/* (Re)builds every incremental field on `g` from board[]. Callers that
+   mutate board[] directly must call this before searching/evaluating.  */
 void
 compute_eval_state(struct game *g)
 {
@@ -67,8 +66,8 @@ game_init(struct game *g)
     compute_eval_state(g);
 }
 
-/* Castling-rights invalidation: a king/rook leaving its starting square or
-   a capture onto a rook-starting square clears the relevant rights.  */
+/* Squares whose change of occupancy revokes castling rights: a king or
+   rook leaving its home, or a capture landing on a rook home.  */
 static const struct castle_rights_clear castle_rights_clears[6] = {
     { 0x04, CASTLE_WK | CASTLE_WQ },
     { 0x00, CASTLE_WQ              },
@@ -89,10 +88,6 @@ update_castling_rights(struct game *g, const struct move *m)
     }
 }
 
-/* Every board mutation has paired Zobrist, material, PSQT, phase, bishop,
-   king-square, and pawn-hash updates so the incremental state never drifts
-   from a from-scratch recompute. The capture branch must read `victim`
-   before the destination square is overwritten.  */
 void
 make_move(struct game *g, const struct move *m, struct undo_state *undo)
 {
@@ -242,10 +237,7 @@ make_move(struct game *g, const struct move *m, struct undo_state *undo)
     g->hash = h;
 }
 
-/* Caller invariant: `m` and `undo` must be the pair handed to the most
-   recent matching make_move on `g`. Board mutations are reversed in the
-   inverse order of make_move's phases; scalar incremental state is
-   restored bitwise from undo.  */
+/* `m` and `undo` must be the pair handed to the matching make_move.  */
 void
 unmake_move(struct game *g, const struct move *m, const struct undo_state *undo)
 {
@@ -269,7 +261,7 @@ unmake_move(struct game *g, const struct move *m, const struct undo_state *undo)
     memcpy(g->bishops,  undo->bishops,  sizeof(g->bishops));
     memcpy(g->king_sq,  undo->king_sq,  sizeof(g->king_sq));
 
-    /* Un-castle the rook BEFORE we read board[m->to] for the king below.  */
+    /* Un-castle the rook before the king is restored below.  */
     if (m->flags & (MOVE_CASTLE_K | MOVE_CASTLE_Q)) {
         const int ks   = m->flags & MOVE_CASTLE_K;
         const int from = ks ? m->to + 1 : m->to - 2;
@@ -290,9 +282,6 @@ unmake_move(struct game *g, const struct move *m, const struct undo_state *undo)
     }
 }
 
-/* Lives here (not movegen.c) so movegen.c stays free of the
-   make/unmake dependency — the test harness compiles movegen.c
-   standalone.  */
 void
 append_legal_moves(struct game *g, struct move_list *list)
 {
@@ -312,7 +301,7 @@ append_legal_moves(struct game *g, struct move_list *list)
     list->count = kept;
 }
 
-/* Returns 1 (and prints a message) when the game has ended.  */
+/* Prints a result line and returns 1 when the game has ended.  */
 static int
 report_terminal(struct game *g)
 {

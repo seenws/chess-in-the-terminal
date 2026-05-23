@@ -19,14 +19,18 @@ struct game;
   #define AI_DEFAULT_DEPTH 5
 #endif
 
+/* Centipawn material value of each piece_type; PIECE_NONE = 0.  */
 extern const int piece_value[7];
 
 /* Tapered piece-square tables. Eval interpolates between mg and eg by
-   `phase` (remaining non-pawn material weight, 0..PHASE_MAX). Tables are
-   laid out with row 0 = rank 8; pst_lookup mirrors for black.  */
+   `phase` (remaining non-pawn material weight, 0..PHASE_MAX). Row 0 of
+   each table = rank 8; pst_lookup mirrors for black.  */
 #define PHASE_MAX 24
+/* Phase contribution of each piece_type, summed across the board.  */
 extern const int     phase_weight[7];
+/* Middlegame piece-square table indexed by [piece_type][square].  */
 extern const int16_t pst_mg[7][64];
+/* Endgame piece-square table indexed by [piece_type][square].  */
 extern const int16_t pst_eg[7][64];
 
 struct pst_pair { int16_t mg; int16_t eg; };
@@ -50,8 +54,8 @@ enum tt_bound {
     TT_BOUND_UPPER,
 };
 
-/* 16-byte entry. `key` is the full Zobrist; the index in the TT array is
-   key & mask, so we compare against `key` to reject index collisions.
+/* 16-byte TT entry. `key` is the full Zobrist; the index in the TT array
+   is key & mask, so callers compare against `key` to reject collisions.
    `move` is packed by move_pack; 0 means no stored move.  */
 struct tt_entry {
     uint64_t key;
@@ -67,6 +71,10 @@ void tt_init       (size_t mb);
 void tt_free       (void);
 void tt_clear      (void);
 void tt_new_search (void);
+
+/* SEE: signed centipawn outcome of the capture sequence on `m->to`,
+   from the mover's perspective. Returns 0 for non-captures.  */
+int see(const uint8_t board[128], const struct move *m);
 
 int  tt_probe (uint64_t key, int depth, int alpha, int beta,
                int *score_out, uint16_t *move_out);
@@ -126,13 +134,10 @@ void search_reset_state(void);
    inside negamax's own null-move recursion.  */
 int negamax(struct game *g, int depth, int ply, int alpha, int beta, int can_null);
 
-/* The following structs are search-internal but live here so all engine
-   types are header-resident.  */
-
 struct pawn_eval { int mg; int eg; };
 
-/* Per-file pawn data shared across eval terms. count[c][f] = pawns of
-   color c on file f. max_rank/min_rank are -1/8 if no pawn on that file.  */
+/* Per-file pawn data shared across eval terms. `count[c][f]` = pawns of
+   color c on file f; max_rank/min_rank are -1/8 if no pawn on that file.  */
 struct pawn_info {
     int8_t count[2][8];
     int8_t max_rank[2][8];
@@ -146,7 +151,7 @@ struct pawn_hash_entry {
     int16_t          eg;
 };
 
-/* UCI-style move string ("e2e4", "a7a8q"). buf must hold at least 6.  */
+/* UCI-style move string ("e2e4", "a7a8q"). `buf` must hold at least 6.  */
 void move_to_uci(const struct move *m, char buf[6]);
 
-#endif
+#endif /* CITT_HEADERS_SEARCH_H_ */

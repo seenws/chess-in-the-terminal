@@ -11,6 +11,8 @@ uint64_t z_castle[16];
 uint64_t z_ep_file[8];
 uint64_t z_side;
 
+/* Nonzero once the key tables have been filled; protects against
+   re-seeding mid-game.  */
 static int zobrist_initialized = 0;
 
 /* SplitMix64; see rosettacode.org/wiki/Pseudo-random_numbers/Splitmix64.  */

@@ -12,10 +12,9 @@
 #include "parser.h"
 #include "zobrist.h"
 
-/* Reads up to bufsz bytes from `file` into `buffer`, stopping at newline or
-   EOF. Newline and any discarded overflow are not counted. Caller checks
-   feof(file) separately to distinguish end-of-stream from a blank line.
-   Adapted from https://gitlab.com/bradenbest/bradenlib.  */
+/* Reads up to bufsz bytes from `file` into `buffer`, stopping at newline
+   or EOF. The newline and any discarded overflow are not counted; caller
+   uses feof(file) to distinguish end-of-stream from a blank line.  */
 size_t
 get_line(char *buffer, size_t bufsz, FILE *file)
 {
@@ -43,8 +42,8 @@ get_line(char *buffer, size_t bufsz, FILE *file)
     return buflen;
 }
 
-/* Resolves an uppercase piece letter (NBRQK; P also when allow_pawn).
-   Returns 1 on success. King is rejected unless `allow_king`.  */
+/* Maps an uppercase piece letter to its piece_type; returns 1 on success.
+   K is rejected unless `allow_king`; P unless `allow_pawn`.  */
 static int
 piece_from_letter(char c, enum piece_type *out, int allow_king, int allow_pawn)
 {
@@ -70,9 +69,9 @@ encode_square_0x88(char file_ch, char rank_ch, uint8_t *out)
 }
 
 /* Parses one SAN token. Returns 1 on success, 0 on malformed input.
-   Recognises piece letter (NBRQK; pawn implicit), optional disambiguator,
-   optional 'x', destination square, optional "=X", trailing +/#/!/?, and
-   the castling tokens "O-O" and "O-O-O".  */
+   Accepts piece letter (NBRQK; pawn implicit), optional disambiguator,
+   optional 'x', destination square, optional "=X", trailing +/#/!/?,
+   and the castling tokens "O-O" and "O-O-O".  */
 int
 parse_san(char const *buffer, size_t bufsz, struct san_move *out)
 {
@@ -95,7 +94,6 @@ parse_san(char const *buffer, size_t bufsz, struct san_move *out)
     if (len == 0)
         return 0;
 
-    /* Longer castle token first to avoid prefix conflict with O-O.  */
     if (len >= 5 && memcmp(buffer, "O-O-O", 5) == 0) {
         out->type   = PIECE_KING;
         out->castle = SAN_CASTLE_Q;
@@ -107,17 +105,14 @@ parse_san(char const *buffer, size_t bufsz, struct san_move *out)
         return 1;
     }
 
-    /* Strip "=X" before tokenising the body so X isn't mistaken for a
-       moving-piece prefix.  */
     if (len >= 2 && buffer[len-2] == '=') {
         if (!piece_from_letter(buffer[len-1], &out->promo, 0, 0))
             return 0;
         len -= 2;
     }
 
-    /* Copy core into a working buffer with 'x' stripped so positional
-       parsing works. Layout afterward:
-         [piece letter?] [disambiguator 0..2 chars] [file] [rank]  */
+    /* Working buffer with 'x' stripped; positional layout is then
+         [piece letter?] [disambiguator 0..2 chars] [file] [rank].  */
     char   move[8];
     size_t move_len = 0;
 
@@ -167,8 +162,8 @@ parse_san(char const *buffer, size_t bufsz, struct san_move *out)
     return 0;
 }
 
-/* Picks the first pseudolegal move matching the parsed SAN. Omitting "=X"
-   on a promoting pawn move defaults to queen.  */
+/* Returns the first move in `list` matching `sm`, or NULL. Omitting "=X"
+   on a promoting pawn move means queen.  */
 const struct move *
 match_san(const struct move_list *list, const struct san_move *sm, const uint8_t board[128])
 {

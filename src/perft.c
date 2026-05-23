@@ -13,6 +13,7 @@
 #include "movegen.h"
 #include "search.h"
 
+/* Expected leaf-node counts from the starting position at depths 0..N.  */
 static const uint64_t perft_reference[] = {
     1ULL,           /* depth 0 */
     20ULL,
@@ -63,8 +64,7 @@ perft(struct game *g, int depth)
     return nodes;
 }
 
-/* Per-root-move breakdown: standard tool for narrowing a perft mismatch
-   against a reference engine.  */
+/* Per-root-move breakdown; prints each root's subtotal.  */
 static uint64_t
 perft_divide(struct game *g, int depth)
 {

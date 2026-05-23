@@ -42,8 +42,12 @@ BENCH_BIN = citt-bench
 UCI_BIN   = citt-uci
 
 TEST_BIN  = tmovegen
+TSEE_BIN  = tsee
 
-.PHONY: all release debug clean test perft bench uci
+TSEE_SRC  = tests/tsee.c src/board.c src/parser.c src/movegen.c src/game.c \
+            src/zobrist.c src/search.c
+
+.PHONY: all release debug clean test test-see perft bench uci
 
 all: release
 
@@ -100,7 +104,13 @@ $(TEST_BIN): tests/tmovegen.c src/board.c headers/board.h headers/game.h headers
 test: $(TEST_BIN)
 	./$(TEST_BIN)
 
+$(TSEE_BIN): $(TSEE_SRC)
+	$(CC) $(BASE_CFLAGS) -g -O0 -o $@ $(TSEE_SRC)
+
+test-see: $(TSEE_BIN)
+	./$(TSEE_BIN)
+
 clean:
-	rm -rf build $(REL_BIN) $(DBG_BIN) $(PERFT_BIN) $(BENCH_BIN) $(UCI_BIN) $(TEST_BIN)
+	rm -rf build $(REL_BIN) $(DBG_BIN) $(PERFT_BIN) $(BENCH_BIN) $(UCI_BIN) $(TEST_BIN) $(TSEE_BIN)
 
 -include $(DEPS)

@@ -1,9 +1,4 @@
-/* uci.c -- UCI protocol implementation. Built as a separate `citt-uci`
-   binary; the main `citt` binary keeps its SAN game loop unchanged.
-   Single-threaded: `stop` is honored at the next abort poll inside the
-   search; for fixed-time / fixed-depth matches (the common case under
-   cutechess-cli) this is sufficient. The search deadline does all the
-   real work for clock-based time controls.  */
+/* uci.c -- UCI protocol implementation; the `citt-uci` binary's main loop.  */
 
 #include <ctype.h>
 #include <inttypes.h>
@@ -26,7 +21,9 @@
 #define UCI_HASH_MIN_MB     1
 #define UCI_HASH_MAX_MB     4096
 
+/* Current position; mutated by `position` and `go` commands.  */
 static struct game g_pos;
+/* Size of the transposition table in MB, set by the Hash UCI option.  */
 static size_t      g_hash_mb = UCI_HASH_DEFAULT_MB;
 
 static char *
@@ -45,7 +42,7 @@ rstrip(char *s)
         s[--n] = '\0';
 }
 
-/* Case-insensitive token equality (for option names like "Hash"/"hash").  */
+/* Case-insensitive string equality.  */
 static int
 ieq(const char *a, const char *b)
 {
@@ -57,8 +54,8 @@ ieq(const char *a, const char *b)
     return *a == '\0' && *b == '\0';
 }
 
-/* Apply a UCI-format move ("e2e4", "a7a8q") to `g`. Returns 0 on success,
-   -1 on malformed string or no matching legal move.  */
+/* Applies a UCI move ("e2e4", "a7a8q") to `g`; returns 0 on success,
+   -1 on a malformed string or no matching legal move.  */
 static int
 apply_uci_move(struct game *g, const char *uci)
 {
@@ -115,8 +112,7 @@ cmd_position(char *args)
     } else if (strncmp(p, "fen", 3) == 0
                && (p[3] == ' ' || p[3] == '\t')) {
         p = skip_ws(p + 3);
-        /* FEN ends at " moves" or end-of-string. parse_fen reads up to 6
-           space-separated fields; cap with a NUL so it can't run past.  */
+        /* Cap the FEN with a NUL at " moves" so parse_fen can't run past.  */
         char *moves_kw = strstr(p, " moves");
         char saved = 0;
         if (moves_kw) { saved = *moves_kw; *moves_kw = '\0'; }
@@ -143,8 +139,6 @@ cmd_position(char *args)
             char saved = *end;
             *end = '\0';
             if (apply_uci_move(&g_pos, p) != 0) {
-                /* Silently stop on the first unparseable move; the GUI
-                   sees the resulting bestmove from whatever we have.  */
                 *end = saved;
                 return;
             }
@@ -154,7 +148,8 @@ cmd_position(char *args)
     }
 }
 
-/* Score: report mate distance separately so GUIs render "M5", "-M3" etc.  */
+/* Prints the score field; "mate N" when within the mate window so GUIs
+   render "M5", "-M3" etc.  */
 static void
 print_score(int score)
 {
@@ -215,7 +210,6 @@ cmd_go(char *args)
             continue;
         }
 
-        /* All remaining keywords take a numeric argument.  */
         if (IS("wtime") || IS("btime") || IS("winc") || IS("binc")
          || IS("movetime") || IS("depth") || IS("nodes") || IS("movestogo")) {
 
@@ -237,12 +231,12 @@ cmd_go(char *args)
             continue;
         }
 
-        /* Unknown token: skip past it so we don't loop.  */
+        /* Skip unknown tokens so the loop terminates.  */
         p = skip_ws(end);
         #undef IS
     }
 
-    /* Nothing specified → bounded depth so we don't run forever.  */
+    /* Nothing specified: pick a bounded depth to avoid an unbounded run.  */
     if (lim.max_depth == 0 && !lim.infinite
         && lim.movetime_ms == 0 && lim.node_limit == 0
         && lim.wtime_ms == 0 && lim.btime_ms == 0)
@@ -253,7 +247,7 @@ cmd_go(char *args)
 
     char uci[6];
     if (best.from == 0 && best.to == 0) {
-        /* No legal move (terminal position). UCI convention is "0000".  */
+        /* Terminal position; UCI conventionally reports "0000".  */
         printf("bestmove 0000\n");
     } else {
         move_to_uci(&best, uci);
@@ -262,7 +256,7 @@ cmd_go(char *args)
     fflush(stdout);
 }
 
-/* "setoption name <NAME> [value <VALUE>]" — only Hash is honored.  */
+/* Handles "setoption name <NAME> [value <VALUE>]"; only Hash is honored.  */
 static void
 cmd_setoption(char *args)
 {
@@ -277,7 +271,6 @@ cmd_setoption(char *args)
     memcpy(name, p, nlen);
     name[nlen] = '\0';
 
-    /* Right-trim the name token (the keyword may be followed by spaces).  */
     while (nlen > 0 && (name[nlen - 1] == ' ' || name[nlen - 1] == '\t'))
         name[--nlen] = '\0';
 
@@ -317,7 +310,7 @@ uci_loop(void)
 {
     char line[UCI_LINE_MAX];
 
-    /* GUIs want immediate visibility of our replies.  */
+    /* GUIs need immediate visibility of our replies; disable stdout buffering.  */
     setvbuf(stdout, NULL, _IONBF, 0);
 
     game_init(&g_pos);
@@ -344,7 +337,7 @@ uci_loop(void)
         if (strncmp(p, "setoption", 9) == 0 && (p[9] == ' ' || p[9] == '\t'))
             { cmd_setoption(p + 9); continue; }
 
-        /* UCI spec: silently ignore unrecognized commands.  */
+        /* UCI specifies that unrecognised commands be silently ignored.  */
     }
 }
 

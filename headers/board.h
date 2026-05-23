@@ -71,4 +71,4 @@ is_empty(uint8_t sq)
 void board_init  (uint8_t board[128]);
 void board_print (const uint8_t board[128]);
 
-#endif
+#endif /* CITT_HEADERS_BOARD_H_ */
