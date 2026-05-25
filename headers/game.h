@@ -45,13 +45,6 @@ struct game {
     uint64_t   pawn_hash;
 };
 
-/* Session-level CLI/UI configuration; held outside `struct game` so a
-   position snapshot stays self-contained.  */
-struct ui_config {
-    uint8_t ai_white;
-    uint8_t ai_black;
-};
-
 struct castle_rights_clear {
     uint8_t sq;
     uint8_t mask;
@@ -75,7 +68,6 @@ struct undo_state {
 };
 
 void game_init   (struct game *g);
-int  game_step   (struct game *g, const struct ui_config *cfg);
 
 /* Applies `m` to `g` and writes the inverse into `*undo`. Caller owns
    `undo` (typically a stack local); it must live until the matching

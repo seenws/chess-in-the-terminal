@@ -227,3 +227,22 @@ append_pseudolegal_moves(const struct game *g, struct move_list *list)
     append_pawn_moves(g, list);
     append_castle_moves(g, list);
 }
+
+void
+append_legal_moves(struct game *g, struct move_list *list)
+{
+    append_pseudolegal_moves(g, list);
+
+    size_t kept = 0;
+    for (size_t i = 0; i < list->count; ++i) {
+        struct undo_state undo;
+        make_move(g, &list->moves[i], &undo);
+
+        enum color moved = (g->turn == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
+        if (!king_in_check(g, moved))
+            list->moves[kept++] = list->moves[i];
+
+        unmake_move(g, &list->moves[i], &undo);
+    }
+    list->count = kept;
+}

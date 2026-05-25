@@ -2,6 +2,7 @@
 *.d
 .claude/
 CLAUDE.md
+NNUE_NOTES.md
 
 # Object files
 *.o

@@ -13,6 +13,10 @@ struct game;
 #define SEARCH_MATE      29000
 #define SEARCH_MAX_DEPTH 64
 
+/* Upper bound on Lazy SMP worker threads (the UCI "Threads" option clamps
+   to this). Each worker owns a ~quarter-MB search context.  */
+#define SEARCH_MAX_THREADS 64
+
 #ifdef DEBUG
   #define AI_DEFAULT_DEPTH 3
 #else
@@ -54,17 +58,15 @@ enum tt_bound {
     TT_BOUND_UPPER,
 };
 
-/* 16-byte TT entry. `key` is the full Zobrist; the index in the TT array
-   is key & mask, so callers compare against `key` to reject collisions.
-   `move` is packed by move_pack; 0 means no stored move.  */
+/* 16-byte TT entry, lockless (Hyatt XOR-key). `data` packs the payload
+   (score | move | depth | bound | age) into one 64-bit word; `key_xor` is
+   the full Zobrist XOR that payload. A slot is valid for `key` iff
+   `key_xor ^ data == key`, which both rejects index collisions and detects
+   a torn read from a concurrent writer (treated as a miss). This lets Lazy
+   SMP workers share the table without locks or atomics.  */
 struct tt_entry {
-    uint64_t key;
-    int16_t  score;
-    uint16_t move;
-    uint8_t  depth;
-    uint8_t  bound;
-    uint8_t  age;
-    uint8_t  _pad;
+    uint64_t key_xor;
+    uint64_t data;
 };
 
 /* (Re)allocates the transposition table to roughly `mb` megabytes,
@@ -142,16 +144,17 @@ int  search_run         (struct game *g, const struct search_limits *lim,
    the next poll inside negamax/qsearch.  */
 void search_signal_stop (void);
 
+/* Sets the worker-thread count for subsequent searches (Lazy SMP). Clamped
+   to [1, SEARCH_MAX_THREADS]; 1 means the single-threaded path. Persists
+   until changed.  */
+void search_set_threads (int n);
+
 /* Always tracked, regardless of build mode, so bench can read it.  */
 unsigned long long search_get_nodes(void);
 
 /* Wipe per-search ordering tables (killers, history, pawn-eval cache).
    Use between independent benchmark positions. Does NOT touch the TT.  */
 void search_reset_state(void);
-
-/* `can_null` gates null-move pruning: 1 from external callers, 0 only
-   inside negamax's own null-move recursion.  */
-int negamax(struct game *g, int depth, int ply, int alpha, int beta, int can_null);
 
 struct pawn_eval { int mg; int eg; };
 

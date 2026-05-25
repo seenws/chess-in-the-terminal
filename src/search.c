@@ -14,10 +14,14 @@
 #include "game.h"
 #include "movegen.h"
 #include "search.h"
+#include "search_internal.h"
+#include "thread.h"
 #include "zobrist.h"
 
-/* Total nodes visited by negamax + qsearch during the current search.  */
-static unsigned long long s_nodes;
+/* Backs the single-threaded search path (UCI/CLI/bench). Lazy SMP worker
+   threads use their own per-thread contexts instead.  */
+static struct search_ctx s_main_ctx;
+
 /* Count of TT probes that returned a usable score.  */
 static unsigned long long s_tt_hits;
 /* Count of TT entries written during the current search.  */
@@ -28,14 +32,11 @@ static unsigned long long s_cutoffs;
 /* Polling rate (in nodes) for the abort/deadline check.  */
 #define ABORT_POLL_NODES 4096
 
-/* Set asynchronously by UCI "stop" or a signal; polled inside the search.  */
-static volatile sig_atomic_t s_stop_external;
-/* Absolute time (ms) at which the current search must exit.  */
-static uint64_t              s_deadline_ms;
-/* Node ceiling for the current search; UINT64_MAX means no limit.  */
-static uint64_t              s_node_limit;
-/* Nonzero once an abort condition has tripped; every frame then exits.  */
-static int                   s_aborted;
+/* Control block for the single in-flight search. One search runs at a time
+   (UCI is request/response), so a file-static instance is sufficient; every
+   worker context points its `shared` here. search_signal_stop raises
+   `s_shared.stop`.  */
+static struct search_shared s_shared;
 
 static uint64_t
 now_ms(void)
@@ -46,32 +47,35 @@ now_ms(void)
 }
 
 static int
-check_abort(void)
+check_abort(struct search_ctx *ctx)
 {
-    if (s_aborted)                          return 1;
-    if (s_stop_external)                    { s_aborted = 1; return 1; }
-    if (s_nodes >= s_node_limit)            { s_aborted = 1; return 1; }
-    if (now_ms() >= s_deadline_ms)          { s_aborted = 1; return 1; }
+    const struct search_shared *sh = ctx->shared;
+
+    if (ctx->aborted)                       return 1;
+    if (sh->stop)                           { ctx->aborted = 1; return 1; }
+    if (ctx->nodes >= sh->node_limit)       { ctx->aborted = 1; return 1; }
+    if (now_ms() >= sh->deadline_ms)        { ctx->aborted = 1; return 1; }
     return 0;
 }
 
 void
 search_signal_stop(void)
 {
-    s_stop_external = 1;
+    s_shared.stop = 1;
+}
+
+/* Worker-thread count for Lazy SMP; 1 selects the single-threaded path.  */
+static int s_threads = 1;
+
+void
+search_set_threads(int n)
+{
+    if (n < 1)                  n = 1;
+    if (n > SEARCH_MAX_THREADS) n = SEARCH_MAX_THREADS;
+    s_threads = n;
 }
 
 #define HISTORY_MAX 16384
-
-/* Two killer moves per ply, wiped at the start of every search.  */
-static uint16_t s_killers[SEARCH_MAX_DEPTH * 2][2];
-/* Quiet-move history score indexed by [color][piece_type][to-square];
-   persists across searches and ages slowly via the cutoff bonus.  */
-static int      s_history[2][7][128];
-
-#define PAWN_HASH_SIZE 4096
-/* Cache of pawn-structure evaluations indexed by the pawn-only Zobrist.  */
-static struct pawn_hash_entry s_pawn_hash[PAWN_HASH_SIZE];
 
 #ifdef DEBUG
   #define INC(x) ((x)++)
@@ -144,16 +148,46 @@ tt_new_search(void)
 unsigned long long
 search_get_nodes(void)
 {
-    return s_nodes;
+    return s_main_ctx.nodes;
 }
 
 void
 search_reset_state(void)
 {
-    memset(s_killers,   0, sizeof(s_killers));
-    memset(s_history,   0, sizeof(s_history));
-    memset(s_pawn_hash, 0, sizeof(s_pawn_hash));
+    memset(s_main_ctx.killers,   0, sizeof(s_main_ctx.killers));
+    memset(s_main_ctx.history,   0, sizeof(s_main_ctx.history));
+    memset(s_main_ctx.pawn_hash, 0, sizeof(s_main_ctx.pawn_hash));
 }
+
+/* TT payload bit layout within the 64-bit `data` word:
+     bits  0..15  score (stored as the low 16 bits of int16_t)
+     bits 16..31  packed move
+     bits 32..39  depth
+     bits 40..47  bound
+     bits 48..55  age                                                  */
+static uint64_t
+tt_pack(int score, uint16_t move, int depth, enum tt_bound bound, uint8_t age)
+{
+    return (uint64_t)(uint16_t)(int16_t)score
+         | ((uint64_t)move          << 16)
+         | ((uint64_t)(uint8_t)depth << 32)
+         | ((uint64_t)(uint8_t)bound << 40)
+         | ((uint64_t)age            << 48);
+}
+
+/* Sign-extend the low 16 bits of `data` back to the stored score without
+   relying on implementation-defined unsigned-to-signed conversion.  */
+static int
+tt_unpack_score(uint64_t data)
+{
+    uint16_t u = (uint16_t)(data & 0xFFFFu);
+    return (u < 0x8000u) ? (int)u : (int)u - 0x10000;
+}
+
+static uint16_t tt_unpack_move (uint64_t data) { return (uint16_t)((data >> 16) & 0xFFFFu); }
+static int      tt_unpack_depth(uint64_t data) { return (int)((data >> 32) & 0xFFu); }
+static int      tt_unpack_bound(uint64_t data) { return (int)((data >> 40) & 0xFFu); }
+static uint8_t  tt_unpack_age  (uint64_t data) { return (uint8_t)((data >> 48) & 0xFFu); }
 
 int
 tt_probe(uint64_t key, int depth, int alpha, int beta, int *score_out, uint16_t *move_out)
@@ -162,25 +196,29 @@ tt_probe(uint64_t key, int depth, int alpha, int beta, int *score_out, uint16_t 
 
     struct tt_entry *e = &tt[key & tt_mask];
 
-    if (e->key != key) return 0;
+    /* Snapshot both words once; the XOR check rejects an index collision
+       or a torn read from a concurrent writer (treated as a miss).  */
+    uint64_t data = e->data;
+    if ((e->key_xor ^ data) != key) return 0;
 
-    if (move_out) *move_out = e->move;
+    if (move_out) *move_out = tt_unpack_move(data);
 
-    if ((int)e->depth < depth) return 0;
+    if (tt_unpack_depth(data) < depth) return 0;
 
-    int s = e->score;
+    int s     = tt_unpack_score(data);
+    int bound = tt_unpack_bound(data);
 
-    if (e->bound == TT_BOUND_EXACT) {
+    if (bound == TT_BOUND_EXACT) {
         INC(s_tt_hits);
         *score_out = s;
         return 1;
     }
-    if (e->bound == TT_BOUND_LOWER && s >= beta) {
+    if (bound == TT_BOUND_LOWER && s >= beta) {
         INC(s_tt_hits);
         *score_out = s;
         return 1;
     }
-    if (e->bound == TT_BOUND_UPPER && s <= alpha) {
+    if (bound == TT_BOUND_UPPER && s <= alpha) {
         INC(s_tt_hits);
         *score_out = s;
         return 1;
@@ -198,13 +236,14 @@ tt_store(uint64_t key, int depth, int score, enum tt_bound bound, uint16_t move)
 
     struct tt_entry *e = &tt[key & tt_mask];
 
-    if (e->key == key || e->age != tt_age || depth >= (int)e->depth) {
-        e->key   = key;
-        e->score = (int16_t)score;
-        e->move  = move;
-        e->depth = (uint8_t)depth;
-        e->bound = (uint8_t)bound;
-        e->age   = tt_age;
+    uint64_t old_data = e->data;
+    uint64_t old_key  = e->key_xor ^ old_data;
+
+    if (old_key == key || tt_unpack_age(old_data) != tt_age
+        || depth >= tt_unpack_depth(old_data)) {
+        uint64_t data = tt_pack(score, move, depth, bound, tt_age);
+        e->data    = data;
+        e->key_xor = key ^ data;
         INC(s_tt_stores);
     }
 }
@@ -583,12 +622,12 @@ evaluate_king_shield(const struct game *g, const struct pawn_info *pi)
     return pe;
 }
 
-/* Looks up the pawn-structure eval in s_pawn_hash; on a miss, computes
-   it and stores the result.  */
+/* Looks up the pawn-structure eval in the per-search pawn cache; on a
+   miss, computes it and stores the result.  */
 static struct pawn_eval
-pawn_eval_cached(const struct game *g, struct pawn_info *pi_out)
+pawn_eval_cached(struct search_ctx *ctx, const struct game *g, struct pawn_info *pi_out)
 {
-    struct pawn_hash_entry *e = &s_pawn_hash[g->pawn_hash & (PAWN_HASH_SIZE - 1)];
+    struct pawn_hash_entry *e = &ctx->pawn_hash[g->pawn_hash & (PAWN_HASH_SIZE - 1)];
 
     if (e->key == g->pawn_hash) {
         *pi_out = e->pi;
@@ -608,14 +647,14 @@ pawn_eval_cached(const struct game *g, struct pawn_info *pi_out)
 }
 
 static int
-evaluate(const struct game *g)
+evaluate(struct search_ctx *ctx, const struct game *g)
 {
     int mat = (int)g->material[COLOR_WHITE] - (int)g->material[COLOR_BLACK];
     int mg  = (int)g->psqt_mg[COLOR_WHITE]  - (int)g->psqt_mg[COLOR_BLACK];
     int eg  = (int)g->psqt_eg[COLOR_WHITE]  - (int)g->psqt_eg[COLOR_BLACK];
 
     struct pawn_info pi;
-    struct pawn_eval ps = pawn_eval_cached(g, &pi);
+    struct pawn_eval ps = pawn_eval_cached(ctx, g, &pi);
     struct pawn_eval rf = evaluate_rook_files(g, &pi);
     struct pawn_eval ks = evaluate_king_shield(g, &pi);
 
@@ -793,7 +832,8 @@ see(const struct game *g, const struct move *m)
              0..HISTORY_MAX  quiet history
       -100 000+ losing captures (SEE < 0), pushed below quiets.  */
 static int
-score_move(const struct move *m, const struct game *g, uint16_t tt_move, int ply)
+score_move(const struct search_ctx *ctx, const struct move *m,
+           const struct game *g, uint16_t tt_move, int ply)
 {
     const uint8_t *board = g->board;
     uint16_t packed = move_pack(m);
@@ -824,21 +864,21 @@ score_move(const struct move *m, const struct game *g, uint16_t tt_move, int ply
     if (m->flags & MOVE_PROMO)
         return 90000 + piece_value[m->promo];
 
-    if (packed == s_killers[ply][0]) return 89000;
-    if (packed == s_killers[ply][1]) return 88000;
+    if (packed == ctx->killers[ply][0]) return 89000;
+    if (packed == ctx->killers[ply][1]) return 88000;
 
     enum color      c = piece_color(board[m->from]);
     enum piece_type t = piece_type(board[m->from]);
 
-    return s_history[c][t][m->to];
+    return ctx->history[c][t][m->to];
 }
 
 static void
-score_moves(const struct move_list *ml, const struct game *g,
-            uint16_t tt_move, int ply, int *scores)
+score_moves(const struct search_ctx *ctx, const struct move_list *ml,
+            const struct game *g, uint16_t tt_move, int ply, int *scores)
 {
     for (size_t i = 0; i < ml->count; ++i)
-        scores[i] = score_move(&ml->moves[i], g, tt_move, ply);
+        scores[i] = score_move(ctx, &ml->moves[i], g, tt_move, ply);
 }
 
 /* Pulls the highest-scoring remaining entry to position `start`.  */
@@ -884,15 +924,15 @@ score_from_tt(int s, int ply)
 #define QSEARCH_DELTA_MARGIN  200
 
 static int
-qsearch(struct game *g, int alpha, int beta, int ply)
+qsearch(struct search_ctx *ctx, struct game *g, int alpha, int beta, int ply)
 {
-    s_nodes++;
-    if (s_aborted) return 0;
-    if ((s_nodes & (ABORT_POLL_NODES - 1)) == 0 && check_abort()) return 0;
+    ctx->nodes++;
+    if (ctx->aborted) return 0;
+    if ((ctx->nodes & (ABORT_POLL_NODES - 1)) == 0 && check_abort(ctx)) return 0;
     DBG_ASSERT(g->hash == zobrist_compute(g));
 
     if (ply >= QSEARCH_PLY_LIMIT)
-        return evaluate(g);
+        return evaluate(ctx, g);
 
     const int alpha_orig = alpha;
     {
@@ -908,7 +948,7 @@ qsearch(struct game *g, int alpha, int beta, int ply)
     if (in_check) {
         best = -SEARCH_INF;
     } else {
-        int stand_pat = evaluate(g);
+        int stand_pat = evaluate(ctx, g);
 
         if (stand_pat >= beta) {
             tt_store(g->hash, 0, score_to_tt(stand_pat, ply),
@@ -928,7 +968,7 @@ qsearch(struct game *g, int alpha, int beta, int ply)
     /* Pass tt_move = 0; otherwise score_move would boost a quiet TT move
        to 1M and shadow real captures under the noise break below.  */
     int scores[MAX_MOVES];
-    score_moves(&ml, g, 0, ply, scores);
+    score_moves(ctx, &ml, g, 0, ply, scores);
 
     int legal = 0;
 
@@ -965,7 +1005,7 @@ qsearch(struct game *g, int alpha, int beta, int ply)
 
         legal++;
 
-        int score = -qsearch(g, -beta, -alpha, ply + 1);
+        int score = -qsearch(ctx, g, -beta, -alpha, ply + 1);
 
         unmake_move(g, m, &undo);
 
@@ -990,7 +1030,7 @@ qsearch(struct game *g, int alpha, int beta, int ply)
         return mate_score;
     }
 
-    if (!s_aborted) {
+    if (!ctx->aborted) {
         enum tt_bound bound = (best <= alpha_orig) ? TT_BOUND_UPPER
                             : (best >= beta)       ? TT_BOUND_LOWER
                             :                        TT_BOUND_EXACT;
@@ -1013,15 +1053,16 @@ qsearch(struct game *g, int alpha, int beta, int ply)
 #define ASPIRATION_INIT_DELTA  50
 
 int
-negamax(struct game *g, int depth, int ply, int alpha, int beta, int can_null)
+negamax(struct search_ctx *ctx, struct game *g, int depth, int ply,
+        int alpha, int beta, int can_null)
 {
-    s_nodes++;
-    if (s_aborted) return 0;
-    if ((s_nodes & (ABORT_POLL_NODES - 1)) == 0 && check_abort()) return 0;
+    ctx->nodes++;
+    if (ctx->aborted) return 0;
+    if ((ctx->nodes & (ABORT_POLL_NODES - 1)) == 0 && check_abort(ctx)) return 0;
     DBG_ASSERT(g->hash == zobrist_compute(g));
 
     if (depth <= 0)
-        return qsearch(g, alpha, beta, ply);
+        return qsearch(ctx, g, alpha, beta, ply);
 
     int      alpha_orig = alpha;
     int      tt_score   = 0;
@@ -1047,7 +1088,7 @@ negamax(struct game *g, int depth, int ply, int alpha, int beta, int can_null)
         g->turn      = (g->turn == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
         g->hash     ^= z_side;
 
-        int null_score = -negamax(g, depth - 1 - NULL_MOVE_R, ply + 1,
+        int null_score = -negamax(ctx, g, depth - 1 - NULL_MOVE_R, ply + 1,
                                   -beta, -beta + 1, 0);
 
         g->turn      = (g->turn == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
@@ -1066,7 +1107,7 @@ negamax(struct game *g, int depth, int ply, int alpha, int beta, int can_null)
     append_pseudolegal_moves(g, &ml);
 
     int scores[MAX_MOVES];
-    score_moves(&ml, g, tt_move, ply, scores);
+    score_moves(ctx, &ml, g, tt_move, ply, scores);
 
     int      best      = -SEARCH_INF;
     uint16_t best_move = 0;
@@ -1089,7 +1130,7 @@ negamax(struct game *g, int depth, int ply, int alpha, int beta, int can_null)
         int score;
 
         if (legal == 1) {
-            score = -negamax(g, depth - 1, ply + 1, -beta, -alpha, 1);
+            score = -negamax(ctx, g, depth - 1, ply + 1, -beta, -alpha, 1);
         } else {
             int reduction = 0;
             if (legal >= LMR_MIN_LEGAL
@@ -1102,11 +1143,11 @@ negamax(struct game *g, int depth, int ply, int alpha, int beta, int can_null)
                     reduction = 2;
             }
 
-            score = -negamax(g, depth - 1 - reduction, ply + 1,
+            score = -negamax(ctx, g, depth - 1 - reduction, ply + 1,
                              -alpha - 1, -alpha, 1);
 
             if (score > alpha && beta - alpha > 1)
-                score = -negamax(g, depth - 1, ply + 1, -beta, -alpha, 1);
+                score = -negamax(ctx, g, depth - 1, ply + 1, -beta, -alpha, 1);
         }
 
         unmake_move(g, m, &undo);
@@ -1127,14 +1168,14 @@ negamax(struct game *g, int depth, int ply, int alpha, int beta, int can_null)
                 if (!(m->flags & (MOVE_CAPTURE | MOVE_PROMO))) {
                     uint16_t packed = move_pack(m);
 
-                    if (s_killers[ply][0] != packed) {
-                        s_killers[ply][1] = s_killers[ply][0];
-                        s_killers[ply][0] = packed;
+                    if (ctx->killers[ply][0] != packed) {
+                        ctx->killers[ply][1] = ctx->killers[ply][0];
+                        ctx->killers[ply][0] = packed;
                     }
 
                     enum color      c = piece_color(g->board[m->from]);
                     enum piece_type t = piece_type(g->board[m->from]);
-                    int            *h = &s_history[c][t][m->to];
+                    int            *h = &ctx->history[c][t][m->to];
 
                     *h += depth * depth;
                     if (*h > HISTORY_MAX) *h = HISTORY_MAX;
@@ -1148,7 +1189,7 @@ negamax(struct game *g, int depth, int ply, int alpha, int beta, int can_null)
     if (legal == 0)
         return in_check ? -SEARCH_MATE + ply : 0;
 
-    if (!s_aborted) {
+    if (!ctx->aborted) {
         enum tt_bound bound = (best <= alpha_orig) ? TT_BOUND_UPPER
                             : (best >= beta)       ? TT_BOUND_LOWER
                             :                        TT_BOUND_EXACT;
@@ -1169,11 +1210,16 @@ extract_pv(struct game *g, struct move *out, int max_len)
     if (max_len > SEARCH_MAX_DEPTH) max_len = SEARCH_MAX_DEPTH;
 
     while (tt && n < max_len) {
-        struct tt_entry *e = &tt[g->hash & tt_mask];
-        if (e->key != g->hash || e->move == 0)
+        struct tt_entry *e    = &tt[g->hash & tt_mask];
+        uint64_t         data = e->data;
+        if ((e->key_xor ^ data) != g->hash)
             break;
 
-        struct move stored = move_unpack(e->move);
+        uint16_t mv = tt_unpack_move(data);
+        if (mv == 0)
+            break;
+
+        struct move stored = move_unpack(mv);
 
         /* Recover flags by matching against the legal-move list; this
            also rejects collisions where stored.from/to is bogus.  */
@@ -1236,32 +1282,17 @@ compute_deadline(const struct search_limits *lim, enum color stm, uint64_t start
     return start_ms + budget;
 }
 
-int
-search_run(struct game *g, const struct search_limits *lim,
-           struct move *best_out, search_info_cb info, void *info_ctx)
+void
+search_worker(struct search_ctx *ctx, struct game *g, int max_depth,
+              uint64_t start_ms, int report,
+              search_info_cb info, void *info_ctx,
+              struct search_result *out)
 {
-    if (!tt)
-        tt_init(16);
-
-    tt_new_search();
-
-    s_nodes = s_tt_hits = s_tt_stores = s_cutoffs = 0;
-    memset(s_killers, 0, sizeof(s_killers));
-
-    const uint64_t start_ms = now_ms();
-
-    s_stop_external = 0;
-    s_aborted       = 0;
-    s_deadline_ms   = compute_deadline(lim, g->turn, start_ms);
-    s_node_limit    = lim->node_limit ? lim->node_limit : UINT64_MAX;
-
-    int max_depth = lim->max_depth > 0 ? lim->max_depth : SEARCH_MAX_DEPTH;
-    if (max_depth > SEARCH_MAX_DEPTH) max_depth = SEARCH_MAX_DEPTH;
-
-    DBG_PRINTF("[search] root hash=%016llx max_depth=%d deadline_ms=%llu\n",
-               (unsigned long long)g->hash, max_depth,
-               (unsigned long long)(s_deadline_ms == UINT64_MAX
-                                    ? 0 : s_deadline_ms - start_ms));
+    if (report)
+        DBG_PRINTF("[search] root hash=%016llx max_depth=%d deadline_ms=%llu\n",
+                   (unsigned long long)g->hash, max_depth,
+                   (unsigned long long)(ctx->shared->deadline_ms == UINT64_MAX
+                                        ? 0 : ctx->shared->deadline_ms - start_ms));
 
     int         score          = 0;
     struct move best_move      = (struct move){ 0 };
@@ -1274,12 +1305,13 @@ search_run(struct game *g, const struct search_limits *lim,
 
         uint16_t tt_move = 0;
         if (tt) {
-            struct tt_entry *e = &tt[g->hash & tt_mask];
-            if (e->key == g->hash) tt_move = e->move;
+            struct tt_entry *e    = &tt[g->hash & tt_mask];
+            uint64_t         data = e->data;
+            if ((e->key_xor ^ data) == g->hash) tt_move = tt_unpack_move(data);
         }
 
         int scores[MAX_MOVES];
-        score_moves(&ml, g, tt_move, 0, scores);
+        score_moves(ctx, &ml, g, tt_move, 0, scores);
 
         int alpha, beta;
         int delta = ASPIRATION_INIT_DELTA;
@@ -1318,11 +1350,11 @@ search_run(struct game *g, const struct search_limits *lim,
 
                 legal++;
 
-                int s = -negamax(g, d - 1, 1, -beta, -loop_alpha, 1);
+                int s = -negamax(ctx, g, d - 1, 1, -beta, -loop_alpha, 1);
 
                 unmake_move(g, &ml.moves[i], &undo);
 
-                if (s_aborted) break;
+                if (ctx->aborted) break;
 
                 if (s > best) {
                     best       = s;
@@ -1332,7 +1364,7 @@ search_run(struct game *g, const struct search_limits *lim,
                 if (best > loop_alpha) loop_alpha = best;
             }
 
-            if (s_aborted) break;
+            if (ctx->aborted) break;
             if (legal == 0) break;
 
             if (best <= alpha) {
@@ -1351,7 +1383,7 @@ search_run(struct game *g, const struct search_limits *lim,
             break;
         }
 
-        if (s_aborted) break;
+        if (ctx->aborted) break;
         if (legal == 0) break;
 
         best_move      = local_best;
@@ -1363,28 +1395,71 @@ search_run(struct game *g, const struct search_limits *lim,
         if (info) {
             struct move pv[SEARCH_MAX_DEPTH];
             int         pv_len = extract_pv(g, pv, d);
-            info(d, score, s_nodes, now_ms() - start_ms, pv, pv_len, info_ctx);
+            info(d, score, ctx->nodes, now_ms() - start_ms, pv, pv_len, info_ctx);
         }
 
 #ifdef DEBUG
-        {
+        if (report) {
             char uci[6];
             move_to_uci(&local_best, uci);
             DBG_PRINTF("[search] d =%2d score = %6d best = %s nodes = %llu tt_hits=%llu cutoffs=%llu\n",
-                       d, score, uci, s_nodes, s_tt_hits, s_cutoffs);
+                       d, score, uci, ctx->nodes, s_tt_hits, s_cutoffs);
         }
 #endif
     }
 
-    DBG_PRINTF("[search] total nodes=%llu tt_hits=%llu tt_stores=%llu cutoffs=%llu time=%llums%s\n",
-               s_nodes, s_tt_hits, s_tt_stores, s_cutoffs,
-               (unsigned long long)(now_ms() - start_ms),
-               s_aborted ? " (aborted)" : "");
+    if (report)
+        DBG_PRINTF("[search] total nodes=%llu tt_hits=%llu tt_stores=%llu cutoffs=%llu time=%llums%s\n",
+                   ctx->nodes, s_tt_hits, s_tt_stores, s_cutoffs,
+                   (unsigned long long)(now_ms() - start_ms),
+                   ctx->aborted ? " (aborted)" : "");
+
+    out->score     = score;
+    out->best_move = best_move;
+    out->have_best = have_best_move;
+}
+
+int
+search_run(struct game *g, const struct search_limits *lim,
+           struct move *best_out, search_info_cb info, void *info_ctx)
+{
+    if (!tt)
+        tt_init(16);
+
+    tt_new_search();
+
+    const uint64_t start_ms = now_ms();
+
+    s_shared.stop        = 0;
+    s_shared.deadline_ms = compute_deadline(lim, g->turn, start_ms);
+    s_shared.node_limit  = lim->node_limit ? lim->node_limit : UINT64_MAX;
+    s_tt_hits = s_tt_stores = s_cutoffs = 0;
+
+    int max_depth = lim->max_depth > 0 ? lim->max_depth : SEARCH_MAX_DEPTH;
+    if (max_depth > SEARCH_MAX_DEPTH) max_depth = SEARCH_MAX_DEPTH;
+
+    struct search_result r;
+
+    if (s_threads <= 1) {
+        /* Single-threaded path: reuse the file-static context so killers
+           are wiped per search while history/pawn cache persist across
+           searches, exactly as before Lazy SMP.  */
+        struct search_ctx *ctx = &s_main_ctx;
+        ctx->nodes   = 0;
+        ctx->aborted = 0;
+        ctx->shared  = &s_shared;
+        memset(ctx->killers, 0, sizeof(ctx->killers));
+
+        search_worker(ctx, g, max_depth, start_ms, 1, info, info_ctx, &r);
+    } else {
+        thread_search(s_threads, g, max_depth, start_ms, &s_shared,
+                      info, info_ctx, &r);
+    }
 
     if (best_out)
-        *best_out = have_best_move ? best_move : (struct move){ 0 };
+        *best_out = r.have_best ? r.best_move : (struct move){ 0 };
 
-    return score;
+    return r.score;
 }
 
 int

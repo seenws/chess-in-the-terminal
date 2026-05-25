@@ -1,4 +1,4 @@
-BASE_CFLAGS = -Wall -Wextra -std=c99 -D_POSIX_C_SOURCE=199309L -Iheaders -MMD -MP
+BASE_CFLAGS = -Wall -Wextra -std=c99 -D_POSIX_C_SOURCE=199309L -pthread -Iheaders -MMD -MP
 
 # Release: optimized, NDEBUG strips assert(), no DBG_PRINTF call sites.
 RELEASE_CFLAGS = $(BASE_CFLAGS) -O2 -DNDEBUG
@@ -6,18 +6,18 @@ RELEASE_CFLAGS = $(BASE_CFLAGS) -O2 -DNDEBUG
 # Debug: no opt, debug symbols, DEBUG enables DBG_PRINTF / DBG_ASSERT.
 DEBUG_CFLAGS   = $(BASE_CFLAGS) -g -O0 -DDEBUG
 
-SRC = src/main.c src/board.c src/parser.c src/movegen.c src/game.c \
-      src/zobrist.c src/search.c src/attacks.c
+SRC = src/main.c src/cli.c src/board.c src/parser.c src/movegen.c src/game.c \
+      src/zobrist.c src/search.c src/thread.c src/attacks.c
 
 PERFT_SRC = src/perft.c src/board.c src/parser.c src/movegen.c src/game.c \
-            src/zobrist.c src/search.c src/attacks.c
+            src/zobrist.c src/search.c src/thread.c src/attacks.c
 
 
 BENCH_SRC = src/bench.c src/board.c src/parser.c src/movegen.c src/game.c \
-            src/zobrist.c src/search.c src/attacks.c
+            src/zobrist.c src/search.c src/thread.c src/attacks.c
 
 UCI_SRC   = src/uci.c src/board.c src/parser.c src/movegen.c src/game.c \
-            src/zobrist.c src/search.c src/attacks.c
+            src/zobrist.c src/search.c src/thread.c src/attacks.c
 
 REL_DIR   = build/release
 DBG_DIR   = build/debug
@@ -46,7 +46,7 @@ TEST_BIN  = $(BIN_DIR)/tmovegen
 TSEE_BIN  = $(BIN_DIR)/tsee
 
 TSEE_SRC  = tests/tsee.c src/board.c src/parser.c src/movegen.c src/game.c \
-            src/zobrist.c src/search.c src/attacks.c
+            src/zobrist.c src/search.c src/thread.c src/attacks.c
 
 .PHONY: all release debug clean test test-see perft bench uci
 
@@ -104,9 +104,11 @@ $(UCI_DIR)/%.o: src/%.c
 # Just builds; meant to be driven by an external GUI / test harness over pipes.
 uci: $(UCI_BIN)
 
-$(TEST_BIN): tests/tmovegen.c src/board.c src/attacks.c headers/board.h headers/game.h headers/movegen.h headers/attacks.h headers/bits.h
+TEST_LINK = src/board.c src/attacks.c src/game.c src/zobrist.c src/search.c src/thread.c
+
+$(TEST_BIN): tests/tmovegen.c $(TEST_LINK) headers/board.h headers/game.h headers/movegen.h headers/attacks.h headers/bits.h
 	@mkdir -p $(@D)
-	$(CC) $(BASE_CFLAGS) -g -O0 -o $@ tests/tmovegen.c src/board.c src/attacks.c
+	$(CC) $(BASE_CFLAGS) -g -O0 -o $@ tests/tmovegen.c $(TEST_LINK)
 
 test: $(TEST_BIN)
 	./$(TEST_BIN)

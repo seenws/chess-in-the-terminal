@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "attacks.h"
+#include "cli.h"
 #include "game.h"
 
 static void

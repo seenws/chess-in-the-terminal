@@ -22,6 +22,9 @@
 #define UCI_HASH_DEFAULT_MB 16
 #define UCI_HASH_MIN_MB     1
 #define UCI_HASH_MAX_MB     4096
+#define UCI_THREADS_DEFAULT 1
+#define UCI_THREADS_MIN     1
+#define UCI_THREADS_MAX     SEARCH_MAX_THREADS
 
 /* Current position; mutated by `position` and `go` commands.  */
 static struct game g_pos;
@@ -258,7 +261,7 @@ cmd_go(char *args)
     fflush(stdout);
 }
 
-/* Handles "setoption name <NAME> [value <VALUE>]"; only Hash is honored.  */
+/* Handles "setoption name <NAME> [value <VALUE>]"; honors Hash and Threads.  */
 static void
 cmd_setoption(char *args)
 {
@@ -285,6 +288,10 @@ cmd_setoption(char *args)
             g_hash_mb = (size_t)mb;
             tt_init(g_hash_mb);
         }
+    } else if (ieq(name, "Threads")) {
+        long t = strtol(value, NULL, 10);
+        if (t >= UCI_THREADS_MIN && t <= UCI_THREADS_MAX)
+            search_set_threads((int)t);
     }
 }
 
@@ -295,6 +302,8 @@ cmd_uci(void)
     printf("id author %s\n", ENGINE_AUTHOR);
     printf("option name Hash type spin default %d min %d max %d\n",
            UCI_HASH_DEFAULT_MB, UCI_HASH_MIN_MB, UCI_HASH_MAX_MB);
+    printf("option name Threads type spin default %d min %d max %d\n",
+           UCI_THREADS_DEFAULT, UCI_THREADS_MIN, UCI_THREADS_MAX);
     printf("uciok\n");
     fflush(stdout);
 }
