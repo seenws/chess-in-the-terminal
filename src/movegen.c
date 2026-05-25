@@ -11,7 +11,7 @@
 static inline void
 emit_targets(struct move_list *list, int from, uint64_t targets, uint64_t enemy)
 {
-    uint64_t caps  = targets & enemy;
+    uint64_t caps = targets & enemy;
     uint64_t quiet = targets & ~enemy;
 
     while (caps) {
@@ -33,7 +33,7 @@ square_attacked(const struct game *g, int target_sq, enum color by_color)
     if (knight_attacks(target_sq)   & g->pieces[by_color][PIECE_KNIGHT]) return 1;
     if (king_attacks(target_sq)     & g->pieces[by_color][PIECE_KING])   return 1;
 
-    const uint64_t diag  = g->pieces[by_color][PIECE_BISHOP] | g->pieces[by_color][PIECE_QUEEN];
+    const uint64_t diag = g->pieces[by_color][PIECE_BISHOP] | g->pieces[by_color][PIECE_QUEEN];
     if (bishop_attacks(target_sq, g->occ_all) & diag) return 1;
 
     const uint64_t ortho = g->pieces[by_color][PIECE_ROOK] | g->pieces[by_color][PIECE_QUEEN];
@@ -46,15 +46,15 @@ int
 king_in_check(const struct game *g, enum color side)
 {
     const enum color enemy = (side == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
-    
+
     return square_attacked(g, g->king_sq[side], enemy);
 }
 
 static void
 append_pawn_moves(const struct game *g, struct move_list *list)
 {
-    const enum color us    = g->turn;
-    const enum color them  = (us == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
+    const enum color us = g->turn;
+    const enum color them = (us == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
 
     const uint64_t   pawns = g->pieces[us][PIECE_PAWN];
     const uint64_t   empty = ~g->occ_all;
@@ -73,7 +73,7 @@ append_pawn_moves(const struct game *g, struct move_list *list)
         : (pawns >> 8) & empty;
 
     uint64_t pushes_quiet = pushes & ~promo_rk;
-    uint64_t pushes_promo = pushes &  promo_rk;
+    uint64_t pushes_promo = pushes & promo_rk;
 
     /* Double pushes */
     uint64_t doubles = (us == COLOR_WHITE)
@@ -84,10 +84,10 @@ append_pawn_moves(const struct game *g, struct move_list *list)
        wraparound from the a/h files.  */
     uint64_t caps_left, caps_right;
     if (us == COLOR_WHITE) {
-        caps_left  = ((pawns & ~file_bb[FILE_A]) << 7) & (enemy | ep_bb);
+        caps_left = ((pawns & ~file_bb[FILE_A]) << 7) & (enemy | ep_bb);
         caps_right = ((pawns & ~file_bb[FILE_H]) << 9) & (enemy | ep_bb);
     } else {
-        caps_left  = ((pawns & ~file_bb[FILE_A]) >> 9) & (enemy | ep_bb);
+        caps_left = ((pawns & ~file_bb[FILE_A]) >> 9) & (enemy | ep_bb);
         caps_right = ((pawns & ~file_bb[FILE_H]) >> 7) & (enemy | ep_bb);
     }
 
@@ -105,42 +105,42 @@ append_pawn_moves(const struct game *g, struct move_list *list)
         int to = pop_lsb(&pushes_quiet);
         move_list_push(list, to - push, to, MOVE_QUIET, PIECE_NONE);
     }
-    
+
     while (pushes_promo) {
-        int to   = pop_lsb(&pushes_promo);
+        int to = pop_lsb(&pushes_promo);
         int from = to - push;
         for (int i = 0; i < 4; ++i)
             move_list_push(list, from, to, MOVE_PROMO, promos[i]);
     }
-    
+
     while (doubles) {
         int to = pop_lsb(&doubles);
         move_list_push(list, to - 2 * push, to, MOVE_QUIET, PIECE_NONE);
     }
 
     while (caps_left_other) {
-        int            to    = pop_lsb(&caps_left_other);
+        int to = pop_lsb(&caps_left_other);
         enum move_flag flags = MOVE_CAPTURE;
         if (bit_of(to) & ep_bb) flags |= MOVE_ENP;
         move_list_push(list, to - left_off, to, flags, PIECE_NONE);
     }
-    
+
     while (caps_right_other) {
-        int            to    = pop_lsb(&caps_right_other);
+        int to = pop_lsb(&caps_right_other);
         enum move_flag flags = MOVE_CAPTURE;
         if (bit_of(to) & ep_bb) flags |= MOVE_ENP;
         move_list_push(list, to - right_off, to, flags, PIECE_NONE);
     }
-    
+
     while (caps_left_promo) {
-        int to   = pop_lsb(&caps_left_promo);
+        int to = pop_lsb(&caps_left_promo);
         int from = to - left_off;
         for (int i = 0; i < 4; ++i)
             move_list_push(list, from, to, MOVE_CAPTURE | MOVE_PROMO, promos[i]);
     }
 
     while (caps_right_promo) {
-        int to   = pop_lsb(&caps_right_promo);
+        int to = pop_lsb(&caps_right_promo);
         int from = to - right_off;
         for (int i = 0; i < 4; ++i)
             move_list_push(list, from, to, MOVE_CAPTURE | MOVE_PROMO, promos[i]);
@@ -150,7 +150,7 @@ append_pawn_moves(const struct game *g, struct move_list *list)
 static void
 append_castle_moves(const struct game *g, struct move_list *list)
 {
-    const enum color me    = g->turn;
+    const enum color me = g->turn;
     const enum color enemy = (me == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
 
     const int king_home = (me == COLOR_WHITE) ? 4 : 60;
@@ -188,11 +188,11 @@ append_pseudolegal_moves(const struct game *g, struct move_list *list)
 {
     list->count = 0;
 
-    const enum color us    = g->turn;
-    const enum color them  = (us == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
-    const uint64_t   own   = g->occ[us];
-    const uint64_t   enemy = g->occ[them];
-    const uint64_t   occ   = g->occ_all;
+    const enum color us = g->turn;
+    const enum color them = (us == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
+    const uint64_t own = g->occ[us];
+    const uint64_t enemy = g->occ[them];
+    const uint64_t occ = g->occ_all;
 
     uint64_t knights = g->pieces[us][PIECE_KNIGHT];
     while (knights) {

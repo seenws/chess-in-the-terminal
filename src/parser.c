@@ -96,12 +96,12 @@ parse_san(char const *buffer, size_t bufsz, struct san_move *out)
         return 0;
 
     if (len >= 5 && memcmp(buffer, "O-O-O", 5) == 0) {
-        out->type   = PIECE_KING;
+        out->type = PIECE_KING;
         out->castle = SAN_CASTLE_Q;
         return 1;
     }
     if (len >= 3 && memcmp(buffer, "O-O", 3) == 0) {
-        out->type   = PIECE_KING;
+        out->type = PIECE_KING;
         out->castle = SAN_CASTLE_K;
         return 1;
     }
@@ -287,7 +287,7 @@ parse_fen(struct game *g, const char *fen)
     if (*p++ != ' ') return -1;
 
     char *end = NULL;
-    long  hm  = strtol(p, &end, 10);
+    long hm = strtol(p, &end, 10);
     if (end == p || hm < 0 || hm > 255) return -1;
     g->halfmove = (uint8_t)hm;
     p = end;

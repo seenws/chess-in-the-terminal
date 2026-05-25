@@ -40,8 +40,8 @@ board_print(const uint8_t board[64])
         printf("%d  ", rank + 1);
 
         for (int file = 0; file < 8; ++file) {
-            uint8_t sq  = board[make_sq(rank, file)];
-            char    sym = is_empty(sq) ? '.' : symbols[piece_color(sq)][piece_type(sq)];
+            uint8_t sq = board[make_sq(rank, file)];
+            char sym = is_empty(sq) ? '.' : symbols[piece_color(sq)][piece_type(sq)];
 
             printf("%c ", sym);
         }

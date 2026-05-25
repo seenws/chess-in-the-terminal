@@ -64,7 +64,7 @@ static void
 setup_empty(struct game *g)
 {
     memset(g, 0, sizeof(*g));
-    g->turn      = COLOR_WHITE;
+    g->turn = COLOR_WHITE;
     g->ep_target = EP_NONE;
 }
 
@@ -83,8 +83,8 @@ sync_bitboards(struct game *g)
             continue;
         uint64_t b = bit_of(sq);
         g->pieces[piece_color(p)][piece_type(p)] |= b;
-        g->occ[piece_color(p)]                   |= b;
-        g->occ_all                               |= b;
+        g->occ[piece_color(p)] |= b;
+        g->occ_all |= b;
     }
 }
 

@@ -22,8 +22,8 @@ report_terminal(struct game *g)
 
     if (legal.count == 0) {
         if (king_in_check(g, g->turn)) {
-            const char *loser  = (g->turn == COLOR_WHITE) ? "White"  : "Black";
-            const char *winner = (g->turn == COLOR_WHITE) ? "Black"  : "White";
+            const char *loser = (g->turn == COLOR_WHITE) ? "White" : "Black";
+            const char *winner = (g->turn == COLOR_WHITE) ? "Black" : "White";
             printf("Checkmate. %s wins. (%s is in check with no legal reply.)\n",
                    winner, loser);
         } else {

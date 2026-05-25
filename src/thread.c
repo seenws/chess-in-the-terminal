@@ -41,9 +41,9 @@ thread_search(int n, const struct game *root, int max_depth, uint64_t start_ms,
     *out = (struct search_result){ 0 };
     if (n < 1) n = 1;
 
-    struct search_ctx *ctxs    = calloc((size_t)n, sizeof *ctxs);
-    struct worker_arg *args    = calloc((size_t)n, sizeof *args);
-    pthread_t         *helpers = calloc((size_t)n - 1, sizeof *helpers);
+    struct search_ctx *ctxs = calloc((size_t)n, sizeof *ctxs);
+    struct worker_arg *args = calloc((size_t)n, sizeof *args);
+    pthread_t *helpers = calloc((size_t)n - 1, sizeof *helpers);
 
     if (!ctxs || !args || !helpers) {
         free(ctxs);

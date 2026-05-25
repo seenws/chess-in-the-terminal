@@ -9,6 +9,7 @@
 
 #include "attacks.h"
 #include "game.h"
+#include "nnue.h"
 #include "parser.h"
 #include "search.h"
 
@@ -65,7 +66,7 @@ bench_one(const char *label, const struct game *seed, int depth,
     double      dt    = now_seconds() - t0;
 
     unsigned long long nodes = search_get_nodes();
-    double             knps  = (dt > 0.0) ? (double)nodes / 1000.0 / dt : 0.0;
+    double knps = (dt > 0.0) ? (double)nodes / 1000.0 / dt : 0.0;
 
     char uci[6];
     move_to_uci(&m, uci);
@@ -74,13 +75,18 @@ bench_one(const char *label, const struct game *seed, int depth,
            label, (uint64_t)nodes, dt, knps, uci, score);
 
     *total_nodes += nodes;
-    *total_time  += dt;
+    *total_time += dt;
 }
 
 int
 main(int argc, char **argv)
 {
     attacks_init();
+
+    /* Optional NNUE eval; absent or unreadable file falls back to classic.  */
+    const char *evalfile = getenv("CITT_EVAL_FILE");
+    if (evalfile != NULL && nnue_load(evalfile) != 0)
+        fprintf(stderr, "warning: could not load eval file %s\n", evalfile);
 
     int         depth  = 8;
     const char *single = NULL;

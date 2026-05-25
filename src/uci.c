@@ -12,6 +12,7 @@
 #include "board.h"
 #include "game.h"
 #include "movegen.h"
+#include "nnue.h"
 #include "parser.h"
 #include "search.h"
 #include "uci.h"
@@ -73,7 +74,7 @@ apply_uci_move(struct game *g, const char *uci)
         return -1;
 
     uint8_t from = (uint8_t)make_sq(fr, ff);
-    uint8_t to   = (uint8_t)make_sq(tr, tf);
+    uint8_t to = (uint8_t)make_sq(tr, tf);
 
     enum piece_type promo = PIECE_NONE;
     if (uci[4] != '\0') {
@@ -219,8 +220,8 @@ cmd_go(char *args)
          || IS("movetime") || IS("depth") || IS("nodes") || IS("movestogo")) {
 
             char *vstart = skip_ws(end);
-            char *vend   = NULL;
-            long  v      = strtol(vstart, &vend, 10);
+            char *vend = NULL;
+            long v = strtol(vstart, &vend, 10);
             if (vend == vstart) { p = skip_ws(end); continue; }
 
             if      (IS("wtime"))     lim.wtime_ms    = (uint64_t)(v > 0 ? v : 0);
@@ -292,6 +293,16 @@ cmd_setoption(char *args)
         long t = strtol(value, NULL, 10);
         if (t >= UCI_THREADS_MIN && t <= UCI_THREADS_MAX)
             search_set_threads((int)t);
+    } else if (ieq(name, "EvalFile")) {
+        if (*value == '\0') {
+            nnue_unload();
+            printf("info string EvalFile cleared; using classic eval\n");
+        } else if (nnue_load(value) == 0) {
+            printf("info string EvalFile loaded: %s\n", value);
+        } else {
+            printf("info string EvalFile load failed: %s\n", value);
+        }
+        fflush(stdout);
     }
 }
 
@@ -304,6 +315,7 @@ cmd_uci(void)
            UCI_HASH_DEFAULT_MB, UCI_HASH_MIN_MB, UCI_HASH_MAX_MB);
     printf("option name Threads type spin default %d min %d max %d\n",
            UCI_THREADS_DEFAULT, UCI_THREADS_MIN, UCI_THREADS_MAX);
+    printf("option name EvalFile type string default <empty>\n");
     printf("uciok\n");
     fflush(stdout);
 }

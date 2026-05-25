@@ -46,9 +46,9 @@ static int tables_ready = 0;
 static uint64_t
 leaper_mask(int sq, const int deltas[][2], int n)
 {
-    uint64_t m  = 0;
-    int      r0 = rank_of(sq);
-    int      f0 = file_of(sq);
+    uint64_t m = 0;
+    int r0 = rank_of(sq);
+    int f0 = file_of(sq);
 
     for (int i = 0; i < n; ++i) {
         int r = r0 + deltas[i][0];
@@ -67,8 +67,8 @@ static uint64_t
 ray_attacks(int sq, uint64_t occ, const int dirs[][2], int n_dirs)
 {
     uint64_t attacks = 0;
-    int      r0      = rank_of(sq);
-    int      f0      = file_of(sq);
+    int r0 = rank_of(sq);
+    int f0 = file_of(sq);
 
     for (int d = 0; d < n_dirs; ++d) {
         int r = r0;
@@ -95,9 +95,9 @@ ray_attacks(int sq, uint64_t occ, const int dirs[][2], int n_dirs)
 static uint64_t
 slider_mask(int sq, const int dirs[][2], int n_dirs)
 {
-    uint64_t m  = 0;
-    int      r0 = rank_of(sq);
-    int      f0 = file_of(sq);
+    uint64_t m = 0;
+    int r0 = rank_of(sq);
+    int f0 = file_of(sq);
 
     for (int d = 0; d < n_dirs; ++d) {
         int dr = dirs[d][0];
@@ -167,8 +167,8 @@ static uint64_t
 find_magic(int sq, uint64_t mask, const int dirs[][2], int n_dirs,
            uint64_t *table, int *shift_out)
 {
-    int bits  = popcount(mask);
-    int n     = 1 << bits;
+    int bits = popcount(mask);
+    int n = 1 << bits;
     int shift = 64 - bits;
 
     /* Worst case is rook = 12 bits; same buffer fits both piece types.  */
@@ -219,7 +219,7 @@ attacks_init(void)
 
     for (int sq = 0; sq < 64; ++sq) {
         knight_table[sq] = leaper_mask(sq, knight_deltas, 8);
-        king_table[sq]   = leaper_mask(sq, king_deltas,   8);
+        king_table[sq] = leaper_mask(sq, king_deltas, 8);
 
         int r = rank_of(sq);
         int f = file_of(sq);
@@ -241,23 +241,23 @@ attacks_init(void)
     }
 
     size_t bishop_offset = 0;
-    size_t rook_offset   = 0;
+    size_t rook_offset = 0;
 
     for (int sq = 0; sq < 64; ++sq) {
         bishop_mask[sq] = slider_mask(sq, bishop_dirs, 4);
 
         size_t bishop_entries = (size_t)1 << popcount(bishop_mask[sq]);
         bishop_attack_ptr[sq] = &bishop_attack_data[bishop_offset];
-        bishop_magic[sq]      = find_magic(sq, bishop_mask[sq], bishop_dirs, 4,
-                                           bishop_attack_ptr[sq], &bishop_shift[sq]);
+        bishop_magic[sq] = find_magic(sq, bishop_mask[sq], bishop_dirs, 4,
+                                      bishop_attack_ptr[sq], &bishop_shift[sq]);
         bishop_offset += bishop_entries;
 
         rook_mask[sq] = slider_mask(sq, rook_dirs, 4);
 
         size_t rook_entries = (size_t)1 << popcount(rook_mask[sq]);
         rook_attack_ptr[sq] = &rook_attack_data[rook_offset];
-        rook_magic[sq]      = find_magic(sq, rook_mask[sq], rook_dirs, 4,
-                                         rook_attack_ptr[sq], &rook_shift[sq]);
+        rook_magic[sq] = find_magic(sq, rook_mask[sq], rook_dirs, 4,
+                                    rook_attack_ptr[sq], &rook_shift[sq]);
         rook_offset += rook_entries;
     }
 

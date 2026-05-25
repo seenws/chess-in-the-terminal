@@ -13,6 +13,7 @@
 #include "debug.h"
 #include "game.h"
 #include "movegen.h"
+#include "nnue.h"
 #include "search.h"
 #include "search_internal.h"
 #include "thread.h"
@@ -106,29 +107,29 @@ tt_init(size_t mb)
     tt_free();
 
     size_t bytes = mb * 1024 * 1024;
-    size_t n     = pow2_floor(bytes / sizeof(struct tt_entry));
+    size_t n = pow2_floor(bytes / sizeof(struct tt_entry));
 
     if (n < 1024) n = 1024;
 
     tt = calloc(n, sizeof(struct tt_entry));
     if (!tt) {
         tt_count = 0;
-        tt_mask  = 0;
+        tt_mask = 0;
         return;
     }
 
     tt_count = n;
-    tt_mask  = n - 1;
-    tt_age   = 0;
+    tt_mask = n - 1;
+    tt_age = 0;
 }
 
 void
 tt_free(void)
 {
     free(tt);
-    tt       = NULL;
+    tt = NULL;
     tt_count = 0;
-    tt_mask  = 0;
+    tt_mask = 0;
 }
 
 void
@@ -205,7 +206,7 @@ tt_probe(uint64_t key, int depth, int alpha, int beta, int *score_out, uint16_t 
 
     if (tt_unpack_depth(data) < depth) return 0;
 
-    int s     = tt_unpack_score(data);
+    int s = tt_unpack_score(data);
     int bound = tt_unpack_bound(data);
 
     if (bound == TT_BOUND_EXACT) {
@@ -237,12 +238,12 @@ tt_store(uint64_t key, int depth, int score, enum tt_bound bound, uint16_t move)
     struct tt_entry *e = &tt[key & tt_mask];
 
     uint64_t old_data = e->data;
-    uint64_t old_key  = e->key_xor ^ old_data;
+    uint64_t old_key = e->key_xor ^ old_data;
 
     if (old_key == key || tt_unpack_age(old_data) != tt_age
         || depth >= tt_unpack_depth(old_data)) {
         uint64_t data = tt_pack(score, move, depth, bound, tt_age);
-        e->data    = data;
+        e->data = data;
         e->key_xor = key ^ data;
         INC(s_tt_stores);
     }
@@ -250,7 +251,7 @@ tt_store(uint64_t key, int depth, int score, enum tt_bound bound, uint16_t move)
 
 /* 2-bit encoding of the promotion piece; PIECE_BISHOP and any non-promo
    collapse to 0 (we never store the rare bishop promotion in the TT).  */
-static const uint8_t         promo_pack_table[7]   = {
+static const uint8_t promo_pack_table[7] = {
     [PIECE_QUEEN] = 1, [PIECE_ROOK] = 2, [PIECE_KNIGHT] = 3
 };
 /* Inverse table for promo_pack_table.  */
@@ -447,15 +448,15 @@ collect_pawn_info(const struct game *g, struct pawn_info *pi)
 {
     for (int c = 0; c < 2; ++c)
         for (int f = 0; f < 8; ++f) {
-            pi->count[c][f]    = 0;
+            pi->count[c][f] = 0;
             pi->max_rank[c][f] = -1;
-            pi->min_rank[c][f] =  8;
+            pi->min_rank[c][f] = 8;
         }
 
     for (int c = 0; c < 2; ++c) {
         uint64_t pawns = g->pieces[c][PIECE_PAWN];
         while (pawns) {
-            int sq   = pop_lsb(&pawns);
+            int sq = pop_lsb(&pawns);
             int file = file_of(sq);
             int rank = rank_of(sq);
 
@@ -508,11 +509,11 @@ evaluate_passed_pawns(const struct game *g, const struct pawn_info *pi)
 
     uint64_t white = g->pieces[COLOR_WHITE][PIECE_PAWN];
     while (white) {
-        int sq   = pop_lsb(&white);
+        int sq = pop_lsb(&white);
         int file = file_of(sq);
         int rank = rank_of(sq);
 
-        int blk_F  =              pi->max_rank[COLOR_BLACK][file];
+        int blk_F = pi->max_rank[COLOR_BLACK][file];
         int blk_Fm = (file > 0) ? pi->max_rank[COLOR_BLACK][file - 1] : -1;
         int blk_Fp = (file < 7) ? pi->max_rank[COLOR_BLACK][file + 1] : -1;
 
@@ -525,11 +526,11 @@ evaluate_passed_pawns(const struct game *g, const struct pawn_info *pi)
 
     uint64_t black = g->pieces[COLOR_BLACK][PIECE_PAWN];
     while (black) {
-        int sq   = pop_lsb(&black);
+        int sq = pop_lsb(&black);
         int file = file_of(sq);
         int rank = rank_of(sq);
 
-        int blk_F  =              pi->min_rank[COLOR_WHITE][file];
+        int blk_F = pi->min_rank[COLOR_WHITE][file];
         int blk_Fm = (file > 0) ? pi->min_rank[COLOR_WHITE][file - 1] : 8;
         int blk_Fp = (file < 7) ? pi->min_rank[COLOR_WHITE][file + 1] : 8;
 
@@ -562,7 +563,7 @@ evaluate_rook_files(const struct game *g, const struct pawn_info *pi)
 
     for (int c = 0; c < 2; ++c) {
         const enum color oppo_c = (c == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
-        uint64_t         rooks  = g->pieces[c][PIECE_ROOK];
+        uint64_t rooks = g->pieces[c][PIECE_ROOK];
 
         while (rooks) {
             int sq   = pop_lsb(&rooks);
@@ -594,7 +595,7 @@ evaluate_king_shield(const struct game *g, const struct pawn_info *pi)
         int      k_file   = file_of(king_sq);
         int      k_rank   = rank_of(king_sq);
 
-        int dir   = (c == COLOR_WHITE) ?  1 : -1;
+        int dir = (c == COLOR_WHITE) ? 1 : -1;
         int rank1 = k_rank + dir;
         int rank2 = k_rank + 2 * dir;
 
@@ -649,9 +650,12 @@ pawn_eval_cached(struct search_ctx *ctx, const struct game *g, struct pawn_info 
 static int
 evaluate(struct search_ctx *ctx, const struct game *g)
 {
+    if (nnue_available())
+        return nnue_evaluate(g);
+
     int mat = (int)g->material[COLOR_WHITE] - (int)g->material[COLOR_BLACK];
-    int mg  = (int)g->psqt_mg[COLOR_WHITE]  - (int)g->psqt_mg[COLOR_BLACK];
-    int eg  = (int)g->psqt_eg[COLOR_WHITE]  - (int)g->psqt_eg[COLOR_BLACK];
+    int mg = (int)g->psqt_mg[COLOR_WHITE] - (int)g->psqt_mg[COLOR_BLACK];
+    int eg = (int)g->psqt_eg[COLOR_WHITE] - (int)g->psqt_eg[COLOR_BLACK];
 
     struct pawn_info pi;
     struct pawn_eval ps = pawn_eval_cached(ctx, g, &pi);
@@ -785,11 +789,11 @@ see(const struct game *g, const struct move *m)
 
     if (m->flags & MOVE_PROMO) {
         gain[0] += piece_value[m->promo] - piece_value[PIECE_PAWN];
-        on_to    = m->promo;
+        on_to = m->promo;
     }
 
     side = (mover == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
-    d    = 0;
+    d = 0;
 
     while (1) {
         uint64_t        attackers = attackers_to(g, to, occ) & occ;
@@ -816,9 +820,9 @@ see(const struct game *g, const struct move *m)
         d++;
         gain[d] = piece_value[on_to] - gain[d - 1];
 
-        occ  ^= lva_bit;
+        occ ^= lva_bit;
         on_to = lva;
-        side  = (side == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
+        side = (side == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
     }
 
     return see_unfold_gain(gain, d);
@@ -845,9 +849,9 @@ score_move(const struct search_ctx *ctx, const struct move *m,
         enum piece_type victim_type = (m->flags & MOVE_ENP)
             ? PIECE_PAWN
             : piece_type(board[m->to]);
-        int victim   = piece_value[victim_type];
+        int victim = piece_value[victim_type];
         int attacker = piece_value[piece_type(board[m->from])];
-        int s        = victim * 10 - attacker;
+        int s = victim * 10 - attacker;
 
         if (m->flags & MOVE_PROMO)
             s += piece_value[m->promo] - piece_value[PIECE_PAWN];
@@ -891,13 +895,13 @@ pick_next_move(struct move_list *ml, int *scores, size_t start)
             best = j;
 
     if (best != start) {
-        int ts          = scores[start];
-        scores[start]   = scores[best];
-        scores[best]    = ts;
+        int ts = scores[start];
+        scores[start] = scores[best];
+        scores[best] = ts;
 
-        struct move tm   = ml->moves[start];
+        struct move tm = ml->moves[start];
         ml->moves[start] = ml->moves[best];
-        ml->moves[best]  = tm;
+        ml->moves[best] = tm;
     }
 }
 
@@ -975,8 +979,8 @@ qsearch(struct search_ctx *ctx, struct game *g, int alpha, int beta, int ply)
     for (size_t i = 0; i < ml.count; ++i) {
         pick_next_move(&ml, scores, i);
 
-        const struct move *m     = &ml.moves[i];
-        const int          noisy = (m->flags & (MOVE_CAPTURE | MOVE_PROMO)) != 0;
+        const struct move *m = &ml.moves[i];
+        const int noisy = (m->flags & (MOVE_CAPTURE | MOVE_PROMO)) != 0;
 
         if (!in_check) {
             /* Lazy sort places all noisy moves first; reaching a quiet
@@ -1010,7 +1014,7 @@ qsearch(struct search_ctx *ctx, struct game *g, int alpha, int beta, int ply)
         unmake_move(g, m, &undo);
 
         if (score > best) {
-            best      = score;
+            best = score;
             best_move = move_pack(m);
         }
 
@@ -1064,9 +1068,9 @@ negamax(struct search_ctx *ctx, struct game *g, int depth, int ply,
     if (depth <= 0)
         return qsearch(ctx, g, alpha, beta, ply);
 
-    int      alpha_orig = alpha;
-    int      tt_score   = 0;
-    uint16_t tt_move    = 0;
+    int alpha_orig = alpha;
+    int tt_score = 0;
+    uint16_t tt_move = 0;
 
     if (tt_probe(g->hash, depth, alpha, beta, &tt_score, &tt_move))
         return score_from_tt(tt_score, ply);
@@ -1080,20 +1084,20 @@ negamax(struct search_ctx *ctx, struct game *g, int depth, int ply,
         && beta < SEARCH_MATE - 1000) {
 
         uint64_t saved_hash = g->hash;
-        uint8_t  saved_ep   = g->ep_target;
+        uint8_t saved_ep = g->ep_target;
 
         if (saved_ep != EP_NONE)
             g->hash ^= z_ep_file[file_of(saved_ep)];
         g->ep_target = EP_NONE;
-        g->turn      = (g->turn == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
-        g->hash     ^= z_side;
+        g->turn = (g->turn == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
+        g->hash ^= z_side;
 
         int null_score = -negamax(ctx, g, depth - 1 - NULL_MOVE_R, ply + 1,
                                   -beta, -beta + 1, 0);
 
-        g->turn      = (g->turn == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
+        g->turn = (g->turn == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
         g->ep_target = saved_ep;
-        g->hash      = saved_hash;
+        g->hash = saved_hash;
 
         if (null_score >= beta) {
             if (null_score >= SEARCH_MATE - 1000)
@@ -1109,9 +1113,9 @@ negamax(struct search_ctx *ctx, struct game *g, int depth, int ply,
     int scores[MAX_MOVES];
     score_moves(ctx, &ml, g, tt_move, ply, scores);
 
-    int      best      = -SEARCH_INF;
+    int best = -SEARCH_INF;
     uint16_t best_move = 0;
-    int      legal     = 0;
+    int legal = 0;
 
     for (size_t i = 0; i < ml.count; ++i) {
         pick_next_move(&ml, scores, i);
@@ -1153,7 +1157,7 @@ negamax(struct search_ctx *ctx, struct game *g, int depth, int ply,
         unmake_move(g, m, &undo);
 
         if (score > best) {
-            best      = score;
+            best = score;
             best_move = move_pack(m);
         }
 
@@ -1210,8 +1214,8 @@ extract_pv(struct game *g, struct move *out, int max_len)
     if (max_len > SEARCH_MAX_DEPTH) max_len = SEARCH_MAX_DEPTH;
 
     while (tt && n < max_len) {
-        struct tt_entry *e    = &tt[g->hash & tt_mask];
-        uint64_t         data = e->data;
+        struct tt_entry *e = &tt[g->hash & tt_mask];
+        uint64_t data = e->data;
         if ((e->key_xor ^ data) != g->hash)
             break;
 
@@ -1273,8 +1277,8 @@ compute_deadline(const struct search_limits *lim, enum color stm, uint64_t start
     if (our_t == 0)
         return UINT64_MAX;
 
-    uint64_t mtg      = (lim->moves_to_go > 0) ? (uint64_t)lim->moves_to_go : 30;
-    uint64_t budget   = our_t / mtg + our_i * 3 / 4;
+    uint64_t mtg = (lim->moves_to_go > 0) ? (uint64_t)lim->moves_to_go : 30;
+    uint64_t budget = our_t / mtg + our_i * 3 / 4;
     uint64_t hard_cap = our_t / 4;
     if (budget > hard_cap) budget = hard_cap;
     if (budget < 10)       budget = 10;
@@ -1294,9 +1298,9 @@ search_worker(struct search_ctx *ctx, struct game *g, int max_depth,
                    (unsigned long long)(ctx->shared->deadline_ms == UINT64_MAX
                                         ? 0 : ctx->shared->deadline_ms - start_ms));
 
-    int         score          = 0;
-    struct move best_move      = (struct move){ 0 };
-    int         have_best_move = 0;
+    int score = 0;
+    struct move best_move = (struct move){ 0 };
+    int have_best_move = 0;
 
     for (int d = 1; d <= max_depth; ++d) {
         /* Move list and scores are reused across aspiration retries.  */
@@ -1305,8 +1309,8 @@ search_worker(struct search_ctx *ctx, struct game *g, int max_depth,
 
         uint16_t tt_move = 0;
         if (tt) {
-            struct tt_entry *e    = &tt[g->hash & tt_mask];
-            uint64_t         data = e->data;
+            struct tt_entry *e = &tt[g->hash & tt_mask];
+            uint64_t data = e->data;
             if ((e->key_xor ^ data) == g->hash) tt_move = tt_unpack_move(data);
         }
 
@@ -1318,10 +1322,10 @@ search_worker(struct search_ctx *ctx, struct game *g, int max_depth,
 
         if (d < ASPIRATION_MIN_DEPTH || !have_best_move) {
             alpha = -SEARCH_INF;
-            beta  =  SEARCH_INF;
+            beta = SEARCH_INF;
         } else {
             alpha = score - delta;
-            beta  = score + delta;
+            beta = score + delta;
         }
 
         int         best;
@@ -1329,9 +1333,9 @@ search_worker(struct search_ctx *ctx, struct game *g, int max_depth,
         int         legal;
 
         for (;;) {
-            best       = -SEARCH_INF;
+            best = -SEARCH_INF;
             local_best = (struct move){ 0 };
-            legal      = 0;
+            legal = 0;
 
             /* Local copy of alpha; the aspiration lower bound stays in
                `alpha` for fail-low detection.  */
@@ -1357,7 +1361,7 @@ search_worker(struct search_ctx *ctx, struct game *g, int max_depth,
                 if (ctx->aborted) break;
 
                 if (s > best) {
-                    best       = s;
+                    best = s;
                     local_best = ml.moves[i];
                 }
 
@@ -1386,8 +1390,8 @@ search_worker(struct search_ctx *ctx, struct game *g, int max_depth,
         if (ctx->aborted) break;
         if (legal == 0) break;
 
-        best_move      = local_best;
-        score          = best;
+        best_move = local_best;
+        score = best;
         have_best_move = 1;
 
         tt_store(g->hash, d, score_to_tt(score, 0), TT_BOUND_EXACT, move_pack(&local_best));
@@ -1414,7 +1418,7 @@ search_worker(struct search_ctx *ctx, struct game *g, int max_depth,
                    (unsigned long long)(now_ms() - start_ms),
                    ctx->aborted ? " (aborted)" : "");
 
-    out->score     = score;
+    out->score = score;
     out->best_move = best_move;
     out->have_best = have_best_move;
 }
@@ -1430,9 +1434,9 @@ search_run(struct game *g, const struct search_limits *lim,
 
     const uint64_t start_ms = now_ms();
 
-    s_shared.stop        = 0;
+    s_shared.stop = 0;
     s_shared.deadline_ms = compute_deadline(lim, g->turn, start_ms);
-    s_shared.node_limit  = lim->node_limit ? lim->node_limit : UINT64_MAX;
+    s_shared.node_limit = lim->node_limit ? lim->node_limit : UINT64_MAX;
     s_tt_hits = s_tt_stores = s_cutoffs = 0;
 
     int max_depth = lim->max_depth > 0 ? lim->max_depth : SEARCH_MAX_DEPTH;
@@ -1445,9 +1449,9 @@ search_run(struct game *g, const struct search_limits *lim,
            are wiped per search while history/pawn cache persist across
            searches, exactly as before Lazy SMP.  */
         struct search_ctx *ctx = &s_main_ctx;
-        ctx->nodes   = 0;
+        ctx->nodes = 0;
         ctx->aborted = 0;
-        ctx->shared  = &s_shared;
+        ctx->shared = &s_shared;
         memset(ctx->killers, 0, sizeof(ctx->killers));
 
         search_worker(ctx, g, max_depth, start_ms, 1, info, info_ctx, &r);

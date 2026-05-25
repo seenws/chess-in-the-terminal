@@ -41,7 +41,7 @@ zobrist_init(uint64_t seed)
             z_piece[p][sq] = splitmix64(&s);
 
     for (int i = 0; i < 16; ++i)
-        z_castle[i]  = splitmix64(&s);
+        z_castle[i] = splitmix64(&s);
 
     for (int i = 0; i < 8; ++i)
         z_ep_file[i] = splitmix64(&s);

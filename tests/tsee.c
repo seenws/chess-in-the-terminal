@@ -32,7 +32,7 @@ parse_uci_move(const struct game *g, const char *uci, struct move *out)
         tf < 0 || tf > 7 || tr < 0 || tr > 7) return -1;
 
     int from = make_sq(fr, ff);
-    int to   = make_sq(tr, tf);
+    int to = make_sq(tr, tf);
 
     out->from  = (uint8_t)from;
     out->to    = (uint8_t)to;

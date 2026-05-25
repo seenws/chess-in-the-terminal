@@ -60,6 +60,15 @@ dkms.conf
 # Build outputs (all binaries, objects, and .d files live under build/).
 /build/
 
+# NNUE training artifacts (data, nets, checkpoints) and Python caches.
+# The trainer/ source is tracked; its large/binary outputs are not.
+*.bin
+*.net
+*.pt
+__pycache__/
+*.pyc
+trainer/.venv/
+
 # External reference build kept at root for SPRT/calibration vs current source.
 /citt-uci-baseline*
 

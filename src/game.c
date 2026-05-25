@@ -15,13 +15,13 @@
 static inline void
 bb_toggle(struct game *g, int sq, uint8_t piece)
 {
-    uint64_t        b = bit_of(sq);
-    enum color      c = piece_color(piece);
+    uint64_t b = bit_of(sq);
+    enum color c = piece_color(piece);
     enum piece_type t = piece_type(piece);
 
     g->pieces[c][t] ^= b;
-    g->occ[c]       ^= b;
-    g->occ_all      ^= b;
+    g->occ[c] ^= b;
+    g->occ_all ^= b;
 }
 
 #ifdef DEBUG
@@ -31,8 +31,8 @@ static void
 bitboards_assert_consistent(const struct game *g)
 {
     uint64_t pieces[2][7] = { { 0 } };
-    uint64_t occ[2]       = { 0, 0 };
-    uint64_t occ_all      = 0;
+    uint64_t occ[2] = { 0, 0 };
+    uint64_t occ_all = 0;
 
     for (int sq = 0; sq < 64; ++sq) {
         uint8_t p = g->board[sq];
@@ -40,8 +40,8 @@ bitboards_assert_consistent(const struct game *g)
             continue;
         uint64_t b = bit_of(sq);
         pieces[piece_color(p)][piece_type(p)] |= b;
-        occ[piece_color(p)]                   |= b;
-        occ_all                               |= b;
+        occ[piece_color(p)] |= b;
+        occ_all |= b;
     }
 
     for (int c = 0; c < 2; ++c) {
@@ -68,8 +68,8 @@ compute_eval_state(struct game *g)
     memset(g->pieces,   0, sizeof(g->pieces));
 
     g->occ[0] = g->occ[1] = 0;
-    g->occ_all   = 0;
-    g->phase     = 0;
+    g->occ_all = 0;
+    g->phase = 0;
     g->pawn_hash = 0;
 
     for (int sq = 0; sq < 64; ++sq) {
@@ -77,13 +77,13 @@ compute_eval_state(struct game *g)
         if (is_empty(p))
             continue;
 
-        enum color      c = piece_color(p);
+        enum color c = piece_color(p);
         enum piece_type t = piece_type(p);
-        uint64_t        b = bit_of(sq);
+        uint64_t b = bit_of(sq);
 
         g->pieces[c][t] |= b;
-        g->occ[c]       |= b;
-        g->occ_all      |= b;
+        g->occ[c] |= b;
+        g->occ_all |= b;
 
         if (t != PIECE_KING)
             g->material[c] += (int16_t)piece_value[t];
@@ -185,7 +185,7 @@ make_move(struct game *g, const struct move *m, struct undo_state *undo)
             g->pawn_hash ^= z_piece[victim][m->to];
     }
 
-    const enum piece_type moved_type  = piece_type(piece);
+    const enum piece_type moved_type = piece_type(piece);
     const enum piece_type placed_type = (m->flags & MOVE_PROMO) ? m->promo : moved_type;
 
     h ^= z_piece[piece][m->from];
@@ -210,7 +210,7 @@ make_move(struct game *g, const struct move *m, struct undo_state *undo)
         placed = encode_piece(color, m->promo);
 
         g->material[color] += (int16_t)(piece_value[m->promo] - piece_value[PIECE_PAWN]);
-        g->phase           += (int16_t)(phase_weight[m->promo] - phase_weight[PIECE_PAWN]);
+        g->phase += (int16_t)(phase_weight[m->promo] - phase_weight[PIECE_PAWN]);
 
         if (m->promo == PIECE_BISHOP)
             g->bishops[color]++;
@@ -250,22 +250,22 @@ make_move(struct game *g, const struct move *m, struct undo_state *undo)
         const uint8_t rook      = g->board[rook_from];
 
         bb_toggle(g, rook_from, rook);
-        bb_toggle(g, rook_to,   rook);
+        bb_toggle(g, rook_to, rook);
         h ^= z_piece[rook][rook_from] ^ z_piece[rook][rook_to];
 
-        g->board[rook_to]   = rook;
+        g->board[rook_to] = rook;
         g->board[rook_from] = EMPTY;
 
         struct pst_pair pf = pst_lookup(color, PIECE_ROOK, rook_from);
         struct pst_pair pt = pst_lookup(color, PIECE_ROOK, rook_to);
-        
+
         g->psqt_mg[color] += (int16_t)(pt.mg - pf.mg);
         g->psqt_eg[color] += (int16_t)(pt.eg - pf.eg);
     }
 
     const uint8_t cast_before = g->castling;
     update_castling_rights(g, m);
-    
+
     if (g->castling != cast_before) {
         h ^= z_castle[cast_before & 0xF];
         h ^= z_castle[g->castling  & 0xF];
@@ -273,7 +273,7 @@ make_move(struct game *g, const struct move *m, struct undo_state *undo)
 
     const uint8_t ep_before = g->ep_target;
     g->ep_target = EP_NONE;
-    
+
     if (is_pawn) {
         int rank_delta = rank_of(m->to) - rank_of(m->from);
         if (rank_delta == 2 || rank_delta == -2)
@@ -309,7 +309,7 @@ unmake_move(struct game *g, const struct move *m, const struct undo_state *undo)
     g->turn = (g->turn == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
 
     const enum color color = g->turn;
-    const enum color opp   = (color == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
+    const enum color opp = (color == COLOR_WHITE) ? COLOR_BLACK : COLOR_WHITE;
 
     g->hash      = undo->hash;
     g->phase     = undo->phase;
@@ -317,7 +317,7 @@ unmake_move(struct game *g, const struct move *m, const struct undo_state *undo)
     g->ep_target = undo->ep_target;
     g->castling  = undo->castling;
     g->halfmove  = undo->halfmove;
-    
+
     memcpy(g->material, undo->material, sizeof(g->material));
     memcpy(g->psqt_mg,  undo->psqt_mg,  sizeof(g->psqt_mg));
     memcpy(g->psqt_eg,  undo->psqt_eg,  sizeof(g->psqt_eg));
@@ -331,17 +331,17 @@ unmake_move(struct game *g, const struct move *m, const struct undo_state *undo)
         const int     to   = ks ? m->to - 1 : m->to + 1;
         const uint8_t rook = g->board[to];
 
-        bb_toggle(g, to,   rook);
+        bb_toggle(g, to, rook);
         bb_toggle(g, from, rook);
-        
+
         g->board[from] = rook;
-        g->board[to]   = EMPTY;
+        g->board[to] = EMPTY;
     }
 
-    const uint8_t placed   = g->board[m->to];
+    const uint8_t placed = g->board[m->to];
     const uint8_t restored = (m->flags & MOVE_PROMO) ? encode_piece(color, PIECE_PAWN) : placed;
 
-    bb_toggle(g, m->to,   placed);
+    bb_toggle(g, m->to, placed);
     bb_toggle(g, m->from, restored);
     g->board[m->from] = restored;
 
@@ -350,7 +350,7 @@ unmake_move(struct game *g, const struct move *m, const struct undo_state *undo)
         bb_toggle(g, m->to, undo->captured);
 
     if (m->flags & MOVE_ENP) {
-        int           captured_sq = (color == COLOR_WHITE) ? m->to - 8 : m->to + 8;
+        int captured_sq = (color == COLOR_WHITE) ? m->to - 8 : m->to + 8;
         const uint8_t victim_pawn = encode_piece(opp, PIECE_PAWN);
 
         g->board[captured_sq] = victim_pawn;

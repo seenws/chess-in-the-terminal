@@ -7,6 +7,7 @@
 #include "attacks.h"
 #include "cli.h"
 #include "game.h"
+#include "nnue.h"
 
 static void
 print_usage(const char *prog)
@@ -35,12 +36,17 @@ print_version_info(void)
 int
 main(int argc, char **argv)
 {
-    struct game      g;
-    struct ui_config cfg       = { 0 };
-    int              max_plies = 0;
+    struct game g;
+    struct ui_config cfg = { 0 };
+    int max_plies = 0;
 
     attacks_init();
     game_init(&g);
+
+    /* Optional NNUE eval; absent or unreadable file falls back to classic.  */
+    const char *evalfile = getenv("CITT_EVAL_FILE");
+    if (evalfile != NULL && nnue_load(evalfile) != 0)
+        fprintf(stderr, "warning: could not load eval file %s\n", evalfile);
 
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "-w") == 0 || strcmp(argv[i], "--ai-white") == 0)
