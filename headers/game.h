@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 
+#include "accumulator.h"
 #include "board.h"
 
 struct move;
@@ -43,6 +44,13 @@ struct game {
     int8_t     bishops[2];
     uint8_t    king_sq[2];
     uint64_t   pawn_hash;
+
+    /* NNUE feature-transformer accumulator, kept in lockstep with board[]
+       by make/unmake while a net is loaded. acc.computed[] gates the
+       incremental path: both true means the vectors are trusted, so eval
+       reads them instead of rebuilding. compute_eval_state clears them
+       when no net is loaded, leaving the classic path untouched.  */
+    struct accumulator acc;
 };
 
 struct castle_rights_clear {

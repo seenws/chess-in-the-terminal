@@ -7,6 +7,7 @@
 #include "debug.h"
 #include "game.h"
 #include "movegen.h"
+#include "nnue.h"
 #include "search.h"
 #include "zobrist.h"
 
@@ -98,6 +99,14 @@ compute_eval_state(struct game *g)
         if (t == PIECE_KING)   g->king_sq[c] = (uint8_t)sq;
         if (t == PIECE_PAWN)   g->pawn_hash ^= z_piece[p][sq];
     }
+
+    /* Seed the NNUE accumulator when a net is loaded; otherwise leave it
+       marked invalid so make/unmake skip incremental work on the classic
+       path (the computed[] flags gate it without a per-move net check).  */
+    if (nnue_available())
+        accumulator_refresh_all(&g->acc, g);
+    else
+        g->acc.computed[COLOR_WHITE] = g->acc.computed[COLOR_BLACK] = false;
 }
 
 void
@@ -296,6 +305,12 @@ make_move(struct game *g, const struct move *m, struct undo_state *undo)
 
     g->hash = h;
 
+    /* Patch the NNUE accumulator now that board[]/king_sq[] are in the new
+       position. Gated on computed[] so the classic path pays nothing and a
+       not-yet-seeded accumulator is left for eval to refresh.  */
+    if (g->acc.computed[COLOR_WHITE] && g->acc.computed[COLOR_BLACK])
+        accumulator_update(g, m, piece, placed, victim, +1);
+
     bitboards_assert_consistent(g);
 }
 
@@ -356,6 +371,13 @@ unmake_move(struct game *g, const struct move *m, const struct undo_state *undo)
         g->board[captured_sq] = victim_pawn;
         bb_toggle(g, captured_sq, victim_pawn);
     }
+
+    /* Reverse the accumulator patch with board[]/king_sq[] back in the old
+       position. `restored` is the mover as it sat on m->from; sign -1 inverts
+       the deltas make_move applied (king moves rebuild via refresh, which is
+       direction-agnostic).  */
+    if (g->acc.computed[COLOR_WHITE] && g->acc.computed[COLOR_BLACK])
+        accumulator_update(g, m, restored, placed, undo->captured, -1);
 
     bitboards_assert_consistent(g);
 }

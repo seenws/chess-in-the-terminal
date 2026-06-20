@@ -72,6 +72,11 @@ bool nnue_available (void);
    pointer only while nnue_available(); do not call otherwise.  */
 const struct nnue_network *nnue_net(void);
 
+/* Nonzero if the runtime CPU supports the AVX2 kernels (always 0 off x86 or
+   on non-GNU compilers). Cached; both the propagate and accumulator paths
+   gate their SIMD on it so the scalar reference stays the fallback.  */
+int nnue_avx2_active(void);
+
 /* HalfKP feature index for a non-king piece, from `perspective`'s point of
    view, with that side's king on `king_sq`. The board is vertically
    flipped (sq ^ 56) for the black perspective so "our side" always faces
