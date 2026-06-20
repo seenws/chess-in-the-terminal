@@ -53,4 +53,7 @@ is_empty(uint8_t sq)
 void board_init  (uint8_t board[64]);
 void board_print (const uint8_t board[64]);
 
+/* FEN glyph for a non-empty piece byte (KQRBNP / kqrbnp).  */
+char piece_to_letter(uint8_t piece);
+
 #endif /* CITT_HEADERS_BOARD_H_ */

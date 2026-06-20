@@ -27,21 +27,27 @@ board_init(uint8_t board[64])
     }
 }
 
+/* FEN glyph for each (color, piece_type); type 0 is unused.  */
+static const char piece_symbols[2][7] = {
+    {' ', 'P', 'B', 'N', 'R', 'Q', 'K'},
+    {' ', 'p', 'b', 'n', 'r', 'q', 'k'}
+};
+
+char
+piece_to_letter(uint8_t piece)
+{
+    return piece_symbols[piece_color(piece)][piece_type(piece)];
+}
+
 void
 board_print(const uint8_t board[64])
 {
-    /* ASCII glyph for each (color, piece_type); index 0 is unused.  */
-    static const char symbols[2][7] = {
-        {' ', 'P', 'B', 'N', 'R', 'Q', 'K'},
-        {' ', 'p', 'b', 'n', 'r', 'q', 'k'}
-    };
-
     for (int rank = 7; rank >= 0; --rank) {
         printf("%d  ", rank + 1);
 
         for (int file = 0; file < 8; ++file) {
             uint8_t sq = board[make_sq(rank, file)];
-            char sym = is_empty(sq) ? '.' : symbols[piece_color(sq)][piece_type(sq)];
+            char sym = is_empty(sq) ? '.' : piece_to_letter(sq);
 
             printf("%c ", sym);
         }

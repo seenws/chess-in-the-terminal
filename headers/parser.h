@@ -38,4 +38,11 @@ const struct move *match_san(const struct move_list *list,
    inconsistent state and should be discarded.  */
 int parse_fen(struct game *g, const char *fen);
 
+/* Buffer size that always holds a FEN plus its terminator.  */
+#define FEN_MAX 92
+
+/* Serializes g's full position as FEN into out (cap bytes incl. terminator).
+   Returns the string length on success, or -1 if it would not fit.  */
+int game_to_fen(const struct game *g, char *out, size_t cap);
+
 #endif /* CITT_HEADERS_PARSER_H_ */

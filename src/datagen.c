@@ -1,10 +1,9 @@
 /* datagen.c -- self-play training-data generator for NNUE.
 
-   Plays CITT-vs-CITT games with the existing search, and for every *quiet*
-   position visited records a fixed-size binary sample: the packed board, the
-   side to move, the search score (centipawns, side-to-move relative), and --
-   back-filled once the game ends -- the game result (white POV). The trainer
-   consumes these as (position -> eval, result) pairs.
+   Plays CITT-vs-CITT games with the existing search, and for every quiet position visited records a fixed-size binary
+   sample: the packed board, the side to move, the search score (centipawns, side-to-move relative),
+   and back-filled once the game ends, the game result (white POV).
+   The trainer consumes these as (position -> eval, result) pairs.
 
    Output file layout (little-endian):
      header: magic "CITTDATA" (8 bytes) | u32 version | u32 record_size
@@ -15,6 +14,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include <signal.h>         /* POSIX: SF labeling drives Stockfish as a child  */
+#include <unistd.h>         /* process over pipes (dev tooling, Linux/macOS).  */
+#include <sys/wait.h>
 
 #include "attacks.h"
 #include "board.h"
@@ -90,10 +93,127 @@ is_quiet(const struct game *g, const struct move *m)
     return 1;
 }
 
+/* --- Stockfish labeling oracle -------------------------------------------
+
+   When --sf is given, the score stored for each quiet position is Stockfish's
+   evaluation instead of CITT's own search score, so the net can learn from a
+   stronger teacher. Classic search still *plays* the games; SF only *labels*.
+   One persistent single-thread SF child per datagen process, driven over a
+   pair of pipes (POSIX). SF reports score from the side-to-move's point of
+   view, matching the record's stm-relative convention.  */
+struct sf {
+    FILE *to;       /* parent -> SF stdin   */
+    FILE *from;     /* SF stdout -> parent  */
+    pid_t pid;
+};
+
+/* Reads SF lines until one begins with `token`. Returns 0, or -1 on EOF.  */
+static int
+sf_expect(struct sf *sf, const char *token)
+{
+    char   line[4096];
+    size_t len = strlen(token);
+
+    while (fgets(line, sizeof line, sf->from))
+        if (strncmp(line, token, len) == 0)
+            return 0;
+    return -1;
+}
+
+static int
+sf_open(struct sf *sf, const char *path)
+{
+    int in[2];
+    int out[2];
+
+    sf->to = sf->from = NULL;
+    sf->pid = -1;
+    if (pipe(in) != 0 || pipe(out) != 0)
+        return -1;
+
+    sf->pid = fork();
+    if (sf->pid < 0)
+        return -1;
+
+    if (sf->pid == 0) {
+        dup2(in[0], STDIN_FILENO);
+        dup2(out[1], STDOUT_FILENO);
+        close(in[0]);  close(in[1]);
+        close(out[0]); close(out[1]);
+        execlp(path, path, (char *)NULL);
+        _exit(127);                         /* exec failed */
+    }
+
+    close(in[0]);
+    close(out[1]);
+    sf->to   = fdopen(in[1], "w");
+    sf->from = fdopen(out[0], "r");
+    if (sf->to == NULL || sf->from == NULL)
+        return -1;
+
+    fputs("uci\n", sf->to);
+    fflush(sf->to);
+    if (sf_expect(sf, "uciok") != 0)
+        return -1;
+    fputs("setoption name Threads value 1\n"
+          "setoption name Hash value 64\n"
+          "isready\n", sf->to);
+    fflush(sf->to);
+    return sf_expect(sf, "readyok");
+}
+
+/* Returns SF's stm-POV score in centipawns, clamped like CITT's own scores.
+   A closed pipe (SF crashed/exec failed) is fatal: better to stop than to
+   silently write zero-scored samples.  */
+static int16_t
+sf_score(struct sf *sf, const char *fen, int depth)
+{
+    char line[4096];
+    int  cp = 0, got = 0;
+
+    fprintf(sf->to, "position fen %s\ngo depth %d\n", fen, depth);
+    fflush(sf->to);
+
+    while (fgets(line, sizeof line, sf->from)) {
+        if (strncmp(line, "bestmove", 8) == 0) {
+            got = 1;
+            break;
+        }
+        char *s = strstr(line, " score ");
+        if (s == NULL)
+            continue;
+        s += 7;                             /* past " score " */
+        if (strncmp(s, "cp ", 3) == 0)
+            cp = atoi(s + 3);
+        else if (strncmp(s, "mate ", 5) == 0)
+            cp = (atoi(s + 5) >= 0) ? 30000 : -30000;
+    }
+
+    if (!got) {
+        fprintf(stderr, "datagen: stockfish stopped responding; aborting\n");
+        exit(EXIT_FAILURE);
+    }
+    return clamp_score(cp);
+}
+
+static void
+sf_close(struct sf *sf)
+{
+    if (sf->to != NULL) {
+        fputs("quit\n", sf->to);
+        fflush(sf->to);
+        fclose(sf->to);
+    }
+    if (sf->from != NULL)
+        fclose(sf->from);
+    if (sf->pid > 0)
+        waitpid(sf->pid, NULL, 0);
+}
+
 /* Plays one game, buffering quiet samples, then writes them all stamped with
    the final result. Returns the number of records written.  */
 static size_t
-play_game(FILE *out, int depth)
+play_game(FILE *out, int depth, struct sf *sf, int sf_depth)
 {
     struct game   g;
     struct sample buf[PLY_CAP];
@@ -143,9 +263,20 @@ play_game(FILE *out, int depth)
         }
 
         if (is_quiet(&g, &m) && n < PLY_CAP) {
+            int16_t label;
+            if (sf != NULL) {
+                char fen[FEN_MAX];
+                if (game_to_fen(&g, fen, sizeof fen) < 0) {
+                    fprintf(stderr, "datagen: FEN serialize failed\n");
+                    return n;
+                }
+                label = sf_score(sf, fen, sf_depth);
+            } else {
+                label = clamp_score(score);
+            }
             memcpy(buf[n].board, g.board, 64);
             buf[n].stm = (uint8_t)g.turn;
-            buf[n].score = clamp_score(score);
+            buf[n].score = label;
             ++n;
         }
 
@@ -172,20 +303,26 @@ print_usage(const char *prog)
 {
     fprintf(stderr,
             "usage: %s [--games N] [--depth D] [--out FILE] [--seed S]\n"
-            "  --games N   number of self-play games (default 1000)\n"
-            "  --depth D   search depth per move (default 8)\n"
-            "  --out FILE  output data file (default data.bin)\n"
-            "  --seed S    PRNG seed for reproducibility (default 1)\n",
+            "          [--sf PATH] [--sf-depth D]\n"
+            "  --games N    number of self-play games (default 1000)\n"
+            "  --depth D    search depth per move (default 8)\n"
+            "  --out FILE   output data file (default data.bin)\n"
+            "  --seed S     PRNG seed for reproducibility (default 1)\n"
+            "  --sf PATH    label quiet positions with this Stockfish binary\n"
+            "               instead of CITT's own search score\n"
+            "  --sf-depth D Stockfish search depth for labeling (default 10)\n",
             prog);
 }
 
 int
 main(int argc, char **argv)
 {
-    long        games = 1000;
-    int         depth = 8;
-    const char *path  = "data.bin";
-    uint64_t    seed  = 1;
+    long        games    = 1000;
+    int         depth    = 8;
+    const char *path     = "data.bin";
+    uint64_t    seed     = 1;
+    const char *sf_path  = NULL;
+    int         sf_depth = 10;
 
     for (int i = 1; i < argc; ++i) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -199,6 +336,10 @@ main(int argc, char **argv)
             path = argv[++i];
         } else if (strcmp(argv[i], "--seed") == 0 && i + 1 < argc) {
             seed = strtoull(argv[++i], NULL, 10);
+        } else if (strcmp(argv[i], "--sf") == 0 && i + 1 < argc) {
+            sf_path = argv[++i];
+        } else if (strcmp(argv[i], "--sf-depth") == 0 && i + 1 < argc) {
+            sf_depth = (int)strtol(argv[++i], NULL, 10);
         } else {
             fprintf(stderr, "datagen: bad argument: %s\n", argv[i]);
             print_usage(argv[0]);
@@ -208,6 +349,10 @@ main(int argc, char **argv)
 
     if (games <= 0 || depth <= 0) {
         fprintf(stderr, "datagen: --games and --depth must be positive\n");
+        return 1;
+    }
+    if (sf_path != NULL && sf_depth <= 0) {
+        fprintf(stderr, "datagen: --sf-depth must be positive\n");
         return 1;
     }
 
@@ -228,12 +373,26 @@ main(int argc, char **argv)
         return 1;
     }
 
+    struct sf  sf;
+    struct sf *sfp = NULL;
+    if (sf_path != NULL) {
+        signal(SIGPIPE, SIG_IGN);           /* a dead SF surfaces as EOF, not a signal */
+        if (sf_open(&sf, sf_path) != 0) {
+            fprintf(stderr, "datagen: failed to start stockfish: %s\n", sf_path);
+            sf_close(&sf);
+            fclose(out);
+            return 1;
+        }
+        sfp = &sf;
+    }
+
     size_t total = 0;
     for (long game = 0; game < games; ++game) {
-        total += play_game(out, depth);
+        total += play_game(out, depth, sfp, sf_depth);
 
         if (ferror(out)) {
             fprintf(stderr, "datagen: write error after game %ld\n", game);
+            if (sfp != NULL) sf_close(sfp);
             fclose(out);
             return 1;
         }
@@ -241,6 +400,9 @@ main(int argc, char **argv)
             fprintf(stderr, "\rgames %ld/%ld  samples %zu", game + 1, games, total);
     }
     fprintf(stderr, "\n");
+
+    if (sfp != NULL)
+        sf_close(sfp);
 
     if (fclose(out) != 0) {
         fprintf(stderr, "datagen: close failed\n");

@@ -303,3 +303,63 @@ parse_fen(struct game *g, const char *fen)
 
     return 0;
 }
+
+/* Inverse of parse_fen: emit the six FEN fields in the order documented above.
+   Built in a local buffer (FEN_MAX always suffices) and copied out only if it
+   fits, so a short `cap` fails cleanly rather than truncating mid-field.  */
+int
+game_to_fen(const struct game *g, char *out, size_t cap)
+{
+    char tmp[FEN_MAX];
+    int  n = 0;
+
+    for (int rank = 7; rank >= 0; --rank) {
+        int empty = 0;
+        for (int file = 0; file < 8; ++file) {
+            uint8_t sq = g->board[make_sq(rank, file)];
+            if (is_empty(sq)) {
+                ++empty;
+                continue;
+            }
+            if (empty) {
+                tmp[n++] = (char)('0' + empty);
+                empty = 0;
+            }
+            tmp[n++] = piece_to_letter(sq);
+        }
+        if (empty)
+            tmp[n++] = (char)('0' + empty);
+        if (rank)
+            tmp[n++] = '/';
+    }
+
+    tmp[n++] = ' ';
+    tmp[n++] = (g->turn == COLOR_WHITE) ? 'w' : 'b';
+    tmp[n++] = ' ';
+
+    if (g->castling == 0) {
+        tmp[n++] = '-';
+    } else {
+        if (g->castling & CASTLE_WK) tmp[n++] = 'K';
+        if (g->castling & CASTLE_WQ) tmp[n++] = 'Q';
+        if (g->castling & CASTLE_BK) tmp[n++] = 'k';
+        if (g->castling & CASTLE_BQ) tmp[n++] = 'q';
+    }
+    tmp[n++] = ' ';
+
+    if (g->ep_target == EP_NONE) {
+        tmp[n++] = '-';
+    } else {
+        tmp[n++] = (char)('a' + (g->ep_target & 7));
+        tmp[n++] = (char)('1' + (g->ep_target >> 3));
+    }
+
+    n += snprintf(tmp + n, sizeof tmp - (size_t)n, " %u %u",
+                  (unsigned)g->halfmove, (unsigned)g->fullmove);
+
+    if ((size_t)n + 1 > cap)
+        return -1;
+    memcpy(out, tmp, (size_t)n);
+    out[n] = '\0';
+    return n;
+}
